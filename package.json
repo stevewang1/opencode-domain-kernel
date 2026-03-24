@@ -1,0 +1,19 @@
+{
+  "name": "opencode-domain-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.1",
+    "@opencode-ai/sdk": "^1.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}
