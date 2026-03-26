@@ -25,4 +25,7 @@ export const codeProfile: DomainProfile = {
   artifacts: {
     summaryFormat: "code",
   },
+  execution: {
+    strategy: "runtime",
+  },
 }

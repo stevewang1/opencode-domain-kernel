@@ -1,4 +1,5 @@
 export type DomainName = "code" | "content" | (string & {})
+export type StrategyName = "runtime" | "legacy-newtype"
 
 export interface AgentSpec {
   name: string
@@ -25,6 +26,10 @@ export interface ArtifactPolicy {
   summaryFormat: "code" | "content" | "generic"
 }
 
+export interface ExecutionPolicy {
+  strategy: StrategyName
+}
+
 export interface DomainProfile {
   name: DomainName
   agents: Record<string, AgentSpec>
@@ -32,6 +37,7 @@ export interface DomainProfile {
   quality: QualityPolicy
   prompts: PromptTemplates
   artifacts: ArtifactPolicy
+  execution: ExecutionPolicy
 }
 
 export interface KernelConfig {

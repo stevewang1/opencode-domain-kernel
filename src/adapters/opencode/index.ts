@@ -1,5 +1,5 @@
 import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
-import { KernelRuntime } from "../../core/runtime.js"
+import { createExecutionStrategy } from "../../core/strategies/index.js"
 import type { DomainProfile } from "../../core/types.js"
 
 export function createOpenCodeAdapter(
@@ -7,7 +7,7 @@ export function createOpenCodeAdapter(
   profile: DomainProfile,
   disabledHooks: string[]
 ): Hooks {
-  const runtime = new KernelRuntime()
+  const strategy = createExecutionStrategy(profile)
   const agent = {
     chief: {
       model: profile.agents.chief?.model,
@@ -23,36 +23,32 @@ export function createOpenCodeAdapter(
   const chiefTask = tool({
     description: "Delegate a task to domain executor agent and optionally run in background.",
     args: {
+      description: tool.schema.string().default("Delegated task"),
+      category: tool.schema.string().optional(),
       subagent_type: tool.schema.string().default(profile.routing.defaultExecutor),
       prompt: tool.schema.string(),
       run_in_background: tool.schema.boolean().default(false),
+      resume: tool.schema.string().optional(),
+      skills: tool.schema.array(tool.schema.string()).optional(),
     },
     async execute(args, context) {
-      const targetAgent = args.subagent_type || profile.routing.defaultExecutor
-      const task = runtime.createTask({ description: args.prompt, agent: targetAgent })
-      if (args.run_in_background) {
-        context.metadata({
-          title: "Background task launched",
-          metadata: { task_id: task.id, profile: profile.name, agent: targetAgent },
-        })
-        return `Task launched in background.\nTask ID: ${task.id}\nProfile: ${profile.name}\nAgent: ${targetAgent}`
-      }
-
-      const result = [
-        `Profile: ${profile.name}`,
-        `Agent: ${targetAgent}`,
-        `Mode: direct`,
-        `Task: ${args.prompt}`,
-      ].join("\n")
-
-      runtime.completeTask(task.id, result)
-
-      context.metadata({
-        title: "Task completed",
-        metadata: { task_id: task.id, profile: profile.name, agent: targetAgent },
+      const targetAgent = args.subagent_type ?? profile.routing.defaultExecutor
+      const result = await strategy.executeChiefTask({
+        description: args.description,
+        prompt: args.prompt,
+        subagentType: targetAgent,
+        runInBackground: args.run_in_background,
+        category: args.category,
+        resume: args.resume,
+        skills: args.skills,
       })
 
-      return result
+      context.metadata({
+        title: args.run_in_background ? "Background task launched" : "Task completed",
+        metadata: { task_id: result.taskID, profile: profile.name, agent: targetAgent },
+      })
+
+      return result.output
     },
   })
 
@@ -62,12 +58,8 @@ export function createOpenCodeAdapter(
       task_id: tool.schema.string(),
     },
     async execute(args) {
-      const task = runtime.getTask(args.task_id)
-      if (!task) return `Task not found: ${args.task_id}`
-      if (task.status === "running") return `Task is still running.\nTask ID: ${task.id}`
-      if (task.status === "cancelled") return `Task was cancelled.\nTask ID: ${task.id}`
-      if (task.status === "failed") return `Task failed.\nTask ID: ${task.id}\nError: ${task.error ?? "unknown"}`
-      return task.result ?? `Task completed.\nTask ID: ${task.id}`
+      const result = await strategy.getBackgroundOutput(args.task_id)
+      return result.output
     },
   })
 
@@ -77,9 +69,8 @@ export function createOpenCodeAdapter(
       task_id: tool.schema.string(),
     },
     async execute(args) {
-      const task = runtime.cancelTask(args.task_id)
-      if (!task) return `Task not found: ${args.task_id}`
-      return `Task cancelled.\nTask ID: ${task.id}`
+      const result = await strategy.cancelBackgroundTask(args.task_id)
+      return result.output
     },
   })
 

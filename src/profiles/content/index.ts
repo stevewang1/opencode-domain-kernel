@@ -25,4 +25,7 @@ export const contentProfile: DomainProfile = {
   artifacts: {
     summaryFormat: "content",
   },
+  execution: {
+    strategy: "legacy-newtype",
+  },
 }
