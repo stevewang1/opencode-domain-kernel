@@ -15,7 +15,8 @@ export function createExecutionStrategy(
     return new LegacyNewtypeExecutionStrategy(
       runtimeStrategy,
       options?.legacyBridge,
-      options?.legacyBridgeFactory
+      options?.legacyBridgeFactory,
+      options?.legacyBridgeModule
     )
   }
 

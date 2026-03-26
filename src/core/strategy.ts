@@ -28,9 +28,15 @@ export type LegacyBridgeFactory = () =>
   | undefined
   | Promise<LegacyBridge | undefined>
 
+export interface LegacyBridgeModuleConfig {
+  modulePath: string
+  exportName?: string
+}
+
 export interface ExecutionOptions {
   legacyBridge?: LegacyBridge
   legacyBridgeFactory?: LegacyBridgeFactory
+  legacyBridgeModule?: LegacyBridgeModuleConfig
 }
 
 export interface TaskExecutionStrategy {
