@@ -12,7 +12,11 @@ export function createExecutionStrategy(
   const runtimeStrategy = new RuntimeExecutionStrategy(runtime, profile)
 
   if (profile.execution.strategy === "legacy-newtype") {
-    return new LegacyNewtypeExecutionStrategy(runtimeStrategy, options?.legacyBridge)
+    return new LegacyNewtypeExecutionStrategy(
+      runtimeStrategy,
+      options?.legacyBridge,
+      options?.legacyBridgeFactory
+    )
   }
 
   return runtimeStrategy

@@ -23,8 +23,14 @@ export interface LegacyBridge {
   cancelBackgroundTask?(taskID: string): Promise<BackgroundResult>
 }
 
+export type LegacyBridgeFactory = () =>
+  | LegacyBridge
+  | undefined
+  | Promise<LegacyBridge | undefined>
+
 export interface ExecutionOptions {
   legacyBridge?: LegacyBridge
+  legacyBridgeFactory?: LegacyBridgeFactory
 }
 
 export interface TaskExecutionStrategy {
