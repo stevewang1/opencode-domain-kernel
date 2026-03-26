@@ -43,4 +43,5 @@ export interface DomainProfile {
 export interface KernelConfig {
   profile: DomainProfile
   disabledHooks?: string[]
+  execution?: import("./strategy.js").ExecutionOptions
 }

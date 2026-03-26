@@ -1,13 +1,15 @@
 import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { createExecutionStrategy } from "../../core/strategies/index.js"
+import type { ExecutionOptions } from "../../core/strategy.js"
 import type { DomainProfile } from "../../core/types.js"
 
 export function createOpenCodeAdapter(
   _ctx: PluginInput,
   profile: DomainProfile,
-  disabledHooks: string[]
+  disabledHooks: string[],
+  execution?: ExecutionOptions
 ): Hooks {
-  const strategy = createExecutionStrategy(profile)
+  const strategy = createExecutionStrategy(profile, execution)
   const agent = {
     chief: {
       model: profile.agents.chief?.model,

@@ -17,6 +17,16 @@ export interface BackgroundResult {
   output: string
 }
 
+export interface LegacyBridge {
+  executeChiefTask?(input: ChiefTaskInput): Promise<ChiefTaskResult>
+  getBackgroundOutput?(taskID: string): Promise<BackgroundResult>
+  cancelBackgroundTask?(taskID: string): Promise<BackgroundResult>
+}
+
+export interface ExecutionOptions {
+  legacyBridge?: LegacyBridge
+}
+
 export interface TaskExecutionStrategy {
   executeChiefTask(input: ChiefTaskInput): Promise<ChiefTaskResult>
   getBackgroundOutput(taskID: string): Promise<BackgroundResult>

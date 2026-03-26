@@ -11,4 +11,5 @@ export function createDomainKernelPlugin(domain: DomainName, options?: Omit<Kern
 }
 
 export * from "./core/types.js"
+export * from "./core/strategy.js"
 export * from "./profiles/index.js"
