@@ -6,7 +6,7 @@ export const codeProfile: DomainProfile = {
     chief: { name: "chief", model: "anthropic/claude-opus-4-1" },
     deputy: {
       name: "deputy",
-      model: "google/antigravity-claude-sonnet-4-5",
+      model: "",
       temperature: 0.05,
     },
   },
