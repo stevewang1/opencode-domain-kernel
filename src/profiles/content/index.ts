@@ -3,7 +3,7 @@ import type { DomainProfile } from "../../core/types.js"
 export const contentProfile: DomainProfile = {
   name: "content",
   agents: {
-    chief: { name: "chief", model: "anthropic/claude-opus-4-1" },
+    chief: { name: "chief", model: "" },
     deputy: {
       name: "deputy",
       model: "",
