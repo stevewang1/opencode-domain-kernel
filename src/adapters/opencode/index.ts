@@ -9,7 +9,10 @@ export function createOpenCodeAdapter(
   disabledHooks: string[],
   execution?: ExecutionOptions
 ): Hooks {
-  const strategy = createExecutionStrategy(profile, execution)
+  const strategy = createExecutionStrategy(profile, {
+    ...execution,
+    runtimeClient: execution?.runtimeClient ?? (_ctx.client as import("../../core/strategy.js").RuntimeSessionClient),
+  })
   const agent = {
     chief: {
       model: profile.agents.chief?.model,
@@ -35,11 +38,13 @@ export function createOpenCodeAdapter(
     },
     async execute(args, context) {
       const targetAgent = args.subagent_type ?? profile.routing.defaultExecutor
+      const runtimeContext = context as { sessionID?: string }
       const result = await strategy.executeChiefTask({
         description: args.description,
         prompt: args.prompt,
         subagentType: targetAgent,
         runInBackground: args.run_in_background,
+        sessionID: runtimeContext.sessionID,
         category: args.category,
         resume: args.resume,
         skills: args.skills,
