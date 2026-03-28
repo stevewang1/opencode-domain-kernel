@@ -139,7 +139,7 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
         console.log(`[kernel.wait] session=${sessionID} response=${diagnostics.lastRaw} current=${this.preview(current)}`)
       }
       if (current.type === "idle") return diagnostics
-      const wait = current.type === "retry" && typeof current.next === "number" ? Math.max(300, current.next) : 500
+      const wait = current.type === "retry" && typeof current.next === "number" ? (current.next > 1000000000000 ? Math.max(500, Math.min(current.next - Date.now(), 5000)) : Math.max(300, current.next)) : 500
       await this.sleep(wait)
     }
     diagnostics.lastStatus = `${diagnostics.lastStatus}|timeout`
