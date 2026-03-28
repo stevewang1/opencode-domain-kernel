@@ -1,6 +1,6 @@
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { DomainKernelConfigSchema, type DomainKernelConfig } from "./config/index.js"
+import { DomainKernelConfigSchema, type DomainKernelConfig, type ProfileConfig } from "./config/index.js"
 import { getUserConfigDir } from "./shared/config-path.js"
 
 export function loadConfigFromPath(configPath: string): DomainKernelConfig | null {
@@ -14,8 +14,8 @@ export function loadConfigFromPath(configPath: string): DomainKernelConfig | nul
         return null
       }
       console.log("Config loaded from " + configPath, {
-        profile: result.data.profile,
-        agents: result.data.agents,
+        defaultProfile: result.data.defaultProfile,
+        profiles: Object.keys(result.data.profiles || {}),
       })
       return result.data
     }
@@ -29,30 +29,35 @@ export function mergeConfigs(
   base: DomainKernelConfig,
   override: DomainKernelConfig
 ): DomainKernelConfig {
-  const mergedAgents = {
-    ...base.agents,
-    ...override.agents,
-  }
-  const mergedDisabled = [
-    ...new Set([
-      ...(base.disabled_agents ?? []),
-      ...(override.disabled_agents ?? []),
-    ]),
-  ]
-  const baseTimeout = base.execution?.timeout ?? 600000
-  const overrideTimeout = override.execution?.timeout
   const mergedExecution = {
-    ...base.execution,
-    ...override.execution,
-    timeout: overrideTimeout ?? baseTimeout,
+    strategy: override.execution?.strategy ?? base.execution?.strategy,
+    timeout: override.execution?.timeout ?? base.execution?.timeout ?? 600000,
   }
   return {
     ...base,
     ...override,
-    agents: mergedAgents,
-    disabled_agents: mergedDisabled,
+    profiles: {
+      ...base.profiles,
+      ...override.profiles,
+    },
+    disabled_agents: [
+      ...new Set([
+        ...(base.disabled_agents ?? []),
+        ...(override.disabled_agents ?? []),
+      ]),
+    ],
     execution: mergedExecution,
   }
+}
+
+export function getProfileConfig(
+  config: DomainKernelConfig,
+  profileName: string
+): ProfileConfig | null {
+  if (config.profiles && config.profiles[profileName]) {
+    return config.profiles[profileName]
+  }
+  return null
 }
 
 export function loadPluginConfig(directory: string): DomainKernelConfig {
@@ -67,19 +72,19 @@ export function loadPluginConfig(directory: string): DomainKernelConfig {
     "domain-kernel-profile.json"
   )
 
-  const defaultConfig: DomainKernelConfig = { profile: "content" }
+  const defaultConfig: DomainKernelConfig = { defaultProfile: "content" }
   const userConfig = loadConfigFromPath(userConfigPath) ?? defaultConfig
-  
+
   const projectConfig = loadConfigFromPath(projectConfigPath)
   if (projectConfig) {
     return mergeConfigs(userConfig, projectConfig)
   }
 
   console.log("Final merged config", {
-    profile: userConfig.profile,
-    agents: userConfig.agents,
+    defaultProfile: userConfig.defaultProfile,
+    profiles: Object.keys(userConfig.profiles || {}),
   })
   return userConfig
 }
 
-export type { DomainKernelConfig }
+export type { DomainKernelConfig, ProfileConfig }

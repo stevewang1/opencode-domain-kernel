@@ -2,7 +2,7 @@ import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { createExecutionStrategy } from "../../core/strategies/index.js"
 import type { ExecutionOptions, RuntimeSessionClient } from "../../core/strategy.js"
 import type { DomainProfile } from "../../core/types.js"
-import { loadPluginConfig, type DomainKernelConfig } from "../../plugin-config.js"
+import { loadPluginConfig, getProfileConfig, type DomainKernelConfig } from "../../plugin-config.js"
 
 function isRuntimeSessionClient(value: unknown): value is RuntimeSessionClient {
   if (!value || typeof value !== "object") return false
@@ -21,51 +21,56 @@ function resolveRuntimeClient(ctx: PluginInput, execution?: ExecutionOptions): R
   return undefined
 }
 
-function mergeAgentConfig(
+function mergeAgentsConfig(
   profile: DomainProfile,
-  userConfig: DomainKernelConfig
-): Record<string, { model?: string; prompt?: string; temperature?: number }> {
-  const agents: Record<string, { model?: string; prompt?: string; temperature?: number }> = {}
-  
+  profileConfig: ReturnType<typeof getProfileConfig>
+): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> = {}
+
   // Chief
   agents.chief = {
-    model: userConfig.agents?.chief?.model ?? profile.agents.chief?.model,
+    model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
     prompt: profile.prompts.chief,
+    skills: profileConfig?.agents?.chief?.skills,
   }
-  
+
   // Deputy
   agents.deputy = {
-    model: userConfig.agents?.deputy?.model ?? profile.agents.deputy?.model,
+    model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
     prompt: profile.prompts.deputy,
-    temperature: userConfig.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
+    temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
+    skills: profileConfig?.agents?.deputy?.skills,
   }
-  
+
   // Explore
-  if (userConfig.agents?.explore?.model) {
+  if (profileConfig?.agents?.explore?.model) {
     agents.explore = {
-      model: userConfig.agents.explore.model,
+      model: profileConfig.agents.explore.model,
+      skills: profileConfig.agents.explore.skills,
     }
   }
-  
+
   // General
-  if (userConfig.agents?.general?.model) {
+  if (profileConfig?.agents?.general?.model) {
     agents.general = {
-      model: userConfig.agents.general.model,
+      model: profileConfig.agents.general.model,
+      skills: profileConfig.agents.general.skills,
     }
   }
-  
+
   // Other agents
   const otherAgents = ["researcher", "writer", "editor", "fact-checker", "archivist", "extractor"] as const
   for (const agentName of otherAgents) {
-    const agentConfig = userConfig.agents?.[agentName]
+    const agentConfig = profileConfig?.agents?.[agentName]
     if (agentConfig?.model) {
       agents[agentName] = {
         model: agentConfig.model,
         temperature: agentConfig.temperature,
+        skills: agentConfig.skills,
       }
     }
   }
-  
+
   return agents
 }
 
@@ -76,12 +81,14 @@ export function createOpenCodeAdapter(
   execution?: ExecutionOptions
 ): Hooks {
   const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
-  const agents = mergeAgentConfig(profile, userConfig)
+  const profileName = userConfig.defaultProfile || "content"
+  const profileConfig = getProfileConfig(userConfig, profileName)
+  const agents = mergeAgentsConfig(profile, profileConfig)
 
   const strategy = createExecutionStrategy(profile, {
     ...execution,
     runtimeClient: resolveRuntimeClient(_ctx, execution),
-    timeout: userConfig.execution?.timeout,
+    timeout: profileConfig?.execution?.timeout ?? userConfig.execution?.timeout,
   })
 
   const chiefTask = tool({
@@ -155,11 +162,13 @@ export function createOpenCodeAdapter(
   const afterHook: Hooks["tool.execute.after"] = async (input, output) => {
     if (disabledSet.has("chief-orchestrator")) return
     if (input.tool !== "chief_task") return
-    const qualityDims = profile.quality.dimensions.join(", ")
+    const qualityDims = (profileConfig?.quality?.dimensions ?? profile.quality.dimensions).join(", ")
+    const passThreshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
     const rendered = [
+      "Profile: " + profileName,
       "Summary Format: " + profile.artifacts.summaryFormat,
       "Quality Dimensions: " + qualityDims,
-      "Pass Threshold: " + profile.quality.passThreshold,
+      "Pass Threshold: " + passThreshold,
       "",
       output.output,
     ].join("\n")
