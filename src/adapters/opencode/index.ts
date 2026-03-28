@@ -24,24 +24,49 @@ function resolveRuntimeClient(ctx: PluginInput, execution?: ExecutionOptions): R
 function mergeAgentConfig(
   profile: DomainProfile,
   userConfig: DomainKernelConfig
-): {
-  chief: { model?: string; prompt: string }
-  deputy: { model?: string; prompt: string; temperature?: number }
-} {
-  const chiefModel = userConfig.agents?.chief?.model ?? profile.agents.chief?.model
-  const deputyModel = userConfig.agents?.deputy?.model ?? profile.agents.deputy?.model
-  const deputyTemp = userConfig.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature
-  return {
-    chief: {
-      model: chiefModel,
-      prompt: profile.prompts.chief,
-    },
-    deputy: {
-      model: deputyModel,
-      prompt: profile.prompts.deputy,
-      temperature: deputyTemp,
-    },
+): Record<string, { model?: string; prompt?: string; temperature?: number }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number }> = {}
+  
+  // Chief
+  agents.chief = {
+    model: userConfig.agents?.chief?.model ?? profile.agents.chief?.model,
+    prompt: profile.prompts.chief,
   }
+  
+  // Deputy
+  agents.deputy = {
+    model: userConfig.agents?.deputy?.model ?? profile.agents.deputy?.model,
+    prompt: profile.prompts.deputy,
+    temperature: userConfig.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
+  }
+  
+  // Explore
+  if (userConfig.agents?.explore?.model) {
+    agents.explore = {
+      model: userConfig.agents.explore.model,
+    }
+  }
+  
+  // General
+  if (userConfig.agents?.general?.model) {
+    agents.general = {
+      model: userConfig.agents.general.model,
+    }
+  }
+  
+  // Other agents
+  const otherAgents = ["researcher", "writer", "editor", "fact-checker", "archivist", "extractor"] as const
+  for (const agentName of otherAgents) {
+    const agentConfig = userConfig.agents?.[agentName]
+    if (agentConfig?.model) {
+      agents[agentName] = {
+        model: agentConfig.model,
+        temperature: agentConfig.temperature,
+      }
+    }
+  }
+  
+  return agents
 }
 
 export function createOpenCodeAdapter(
@@ -51,7 +76,7 @@ export function createOpenCodeAdapter(
   execution?: ExecutionOptions
 ): Hooks {
   const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
-  const agent = mergeAgentConfig(profile, userConfig)
+  const agents = mergeAgentConfig(profile, userConfig)
 
   const strategy = createExecutionStrategy(profile, {
     ...execution,
@@ -122,8 +147,7 @@ export function createOpenCodeAdapter(
     const currentAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
     current.agent = {
       ...currentAgents,
-      chief: agent.chief,
-      deputy: agent.deputy,
+      ...agents,
     }
     current.default_agent = "chief"
   }
