@@ -21,50 +21,60 @@ function resolveRuntimeClient(ctx: PluginInput, execution?: ExecutionOptions): R
   return undefined
 }
 
+function buildScoringPrompt(dimensions: string[], threshold: number): string {
+  if (!dimensions || dimensions.length === 0) return ""
+  
+  const dimLines = dimensions.map(dim => "- " + dim + ": <0.00-1.00>").join("\n")
+
+  return "\n\n<Quality_Assessment>\nAfter completing your task, you MUST evaluate your own work against the following quality dimensions.\nYou MUST output this exact block at the very end of your response:\n\n**QUALITY SCORES:**\n" + dimLines + "\n**OVERALL: <0.00-1.00>**\n\nScore guide:\n- 0.90-1.00: Excellent, highly actionable\n- " + threshold + "-0.89: Passing, meets requirements\n- < " + threshold + ": Needs improvement, rework required\n</Quality_Assessment>"
+}
+
 function mergeAgentsConfig(
   profile: DomainProfile,
   profileConfig: ReturnType<typeof getProfileConfig>
 ): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> {
   const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> = {}
 
-  // Chief
+  const dimensions = profileConfig?.quality?.dimensions ?? profile.quality.dimensions
+  const threshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
+  const scoringPrompt = buildScoringPrompt(dimensions, threshold)
+
   agents.chief = {
     model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
     prompt: profile.prompts.chief,
     skills: profileConfig?.agents?.chief?.skills,
   }
 
-  // Deputy
   agents.deputy = {
     model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
-    prompt: profile.prompts.deputy,
+    prompt: profile.prompts.deputy + scoringPrompt,
     temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
     skills: profileConfig?.agents?.deputy?.skills,
   }
 
-  // Explore
   if (profileConfig?.agents?.explore?.model) {
     agents.explore = {
       model: profileConfig.agents.explore.model,
+      prompt: "You are a code explorer." + scoringPrompt,
       skills: profileConfig.agents.explore.skills,
     }
   }
 
-  // General
   if (profileConfig?.agents?.general?.model) {
     agents.general = {
       model: profileConfig.agents.general.model,
+      prompt: "You are a general purpose assistant." + scoringPrompt,
       skills: profileConfig.agents.general.skills,
     }
   }
 
-  // Other agents
   const otherAgents = ["researcher", "writer", "editor", "fact-checker", "archivist", "extractor"] as const
   for (const agentName of otherAgents) {
     const agentConfig = profileConfig?.agents?.[agentName]
     if (agentConfig?.model) {
       agents[agentName] = {
         model: agentConfig.model,
+        prompt: "You are a " + agentName + "." + scoringPrompt,
         temperature: agentConfig.temperature,
         skills: agentConfig.skills,
       }
@@ -105,6 +115,11 @@ export function createOpenCodeAdapter(
     async execute(args, context) {
       const targetAgent = args.subagent_type ?? profile.routing.defaultExecutor
       const runtimeContext = context as { sessionID?: string }
+      
+      const configuredSkills = agents[targetAgent]?.skills || []
+      const taskSkills = args.skills || []
+      const mergedSkills = [...new Set([...configuredSkills, ...taskSkills])]
+
       const result = await strategy.executeChiefTask({
         description: args.description,
         prompt: args.prompt,
@@ -113,7 +128,7 @@ export function createOpenCodeAdapter(
         sessionID: runtimeContext.sessionID,
         category: args.category,
         resume: args.resume,
-        skills: args.skills,
+        skills: mergedSkills,
       })
 
       context.metadata({
