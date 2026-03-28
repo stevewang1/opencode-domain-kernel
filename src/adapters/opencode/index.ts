@@ -2,6 +2,7 @@ import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { createExecutionStrategy } from "../../core/strategies/index.js"
 import type { ExecutionOptions, RuntimeSessionClient } from "../../core/strategy.js"
 import type { DomainProfile } from "../../core/types.js"
+import { loadPluginConfig, type DomainKernelConfig } from "../../plugin-config.js"
 
 function isRuntimeSessionClient(value: unknown): value is RuntimeSessionClient {
   if (!value || typeof value !== "object") return false
@@ -20,27 +21,43 @@ function resolveRuntimeClient(ctx: PluginInput, execution?: ExecutionOptions): R
   return undefined
 }
 
+function mergeAgentConfig(
+  profile: DomainProfile,
+  userConfig: DomainKernelConfig
+): {
+  chief: { model?: string; prompt: string }
+  deputy: { model?: string; prompt: string; temperature?: number }
+} {
+  const chiefModel = userConfig.agents?.chief?.model ?? profile.agents.chief?.model
+  const deputyModel = userConfig.agents?.deputy?.model ?? profile.agents.deputy?.model
+  const deputyTemp = userConfig.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature
+  return {
+    chief: {
+      model: chiefModel,
+      prompt: profile.prompts.chief,
+    },
+    deputy: {
+      model: deputyModel,
+      prompt: profile.prompts.deputy,
+      temperature: deputyTemp,
+    },
+  }
+}
+
 export function createOpenCodeAdapter(
   _ctx: PluginInput,
   profile: DomainProfile,
   disabledHooks: string[],
   execution?: ExecutionOptions
 ): Hooks {
+  const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
+  const agent = mergeAgentConfig(profile, userConfig)
+
   const strategy = createExecutionStrategy(profile, {
     ...execution,
     runtimeClient: resolveRuntimeClient(_ctx, execution),
+    timeout: userConfig.execution?.timeout,
   })
-  const agent = {
-    chief: {
-      model: profile.agents.chief?.model,
-      prompt: profile.prompts.chief,
-    },
-    deputy: {
-      model: profile.agents.deputy?.model,
-      prompt: profile.prompts.deputy,
-      temperature: profile.agents.deputy?.temperature,
-    },
-  }
 
   const chiefTask = tool({
     description: "Delegate a task to domain executor agent and optionally run in background.",
@@ -114,10 +131,11 @@ export function createOpenCodeAdapter(
   const afterHook: Hooks["tool.execute.after"] = async (input, output) => {
     if (disabledSet.has("chief-orchestrator")) return
     if (input.tool !== "chief_task") return
+    const qualityDims = profile.quality.dimensions.join(", ")
     const rendered = [
-      `Summary Format: ${profile.artifacts.summaryFormat}`,
-      `Quality Dimensions: ${profile.quality.dimensions.join(", ")}`,
-      `Pass Threshold: ${profile.quality.passThreshold}`,
+      "Summary Format: " + profile.artifacts.summaryFormat,
+      "Quality Dimensions: " + qualityDims,
+      "Pass Threshold: " + profile.quality.passThreshold,
       "",
       output.output,
     ].join("\n")

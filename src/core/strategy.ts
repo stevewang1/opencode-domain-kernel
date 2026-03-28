@@ -49,6 +49,7 @@ export interface ExecutionOptions {
   legacyBridgeFactory?: LegacyBridgeFactory
   legacyBridgeModule?: LegacyBridgeModuleConfig
   runtimeClient?: RuntimeSessionClient
+  timeout?: number
 }
 
 export interface TaskExecutionStrategy {
