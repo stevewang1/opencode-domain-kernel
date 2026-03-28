@@ -1,7 +1,24 @@
 import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { createExecutionStrategy } from "../../core/strategies/index.js"
-import type { ExecutionOptions } from "../../core/strategy.js"
+import type { ExecutionOptions, RuntimeSessionClient } from "../../core/strategy.js"
 import type { DomainProfile } from "../../core/types.js"
+
+function isRuntimeSessionClient(value: unknown): value is RuntimeSessionClient {
+  if (!value || typeof value !== "object") return false
+  const session = (value as { session?: Record<string, unknown> }).session
+  if (!session || typeof session !== "object") return false
+  const hasCreate = typeof session.create === "function"
+  const hasMessages = typeof session.messages === "function"
+  const hasPromptAsync = typeof session.promptAsync === "function"
+  const hasPrompt = typeof session.prompt === "function"
+  return hasCreate && hasMessages && (hasPromptAsync || hasPrompt)
+}
+
+function resolveRuntimeClient(ctx: PluginInput, execution?: ExecutionOptions): RuntimeSessionClient | undefined {
+  if (isRuntimeSessionClient(execution?.runtimeClient)) return execution.runtimeClient
+  if (isRuntimeSessionClient(ctx.client)) return ctx.client
+  return undefined
+}
 
 export function createOpenCodeAdapter(
   _ctx: PluginInput,
@@ -11,7 +28,7 @@ export function createOpenCodeAdapter(
 ): Hooks {
   const strategy = createExecutionStrategy(profile, {
     ...execution,
-    runtimeClient: execution?.runtimeClient ?? (_ctx.client as import("../../core/strategy.js").RuntimeSessionClient),
+    runtimeClient: resolveRuntimeClient(_ctx, execution),
   })
   const agent = {
     chief: {

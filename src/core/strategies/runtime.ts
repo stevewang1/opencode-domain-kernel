@@ -17,6 +17,13 @@ type BackgroundSessionTask = {
   error?: string
 }
 
+type WaitDiagnostics = {
+  polls: number
+  seenSession: boolean
+  lastStatus: string
+  lastRaw: string
+}
+
 export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
   private readonly backgroundSessions = new Map<string, BackgroundSessionTask>()
 
@@ -26,13 +33,143 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
     private readonly client?: RuntimeSessionClient
   ) {}
 
+  private describeClientCapabilities(): string {
+    const session = this.client?.session as Record<string, unknown> | undefined
+    const hasClient = Boolean(this.client)
+    const hasSession = Boolean(session)
+    const hasCreate = typeof session?.create === "function"
+    const hasMessages = typeof session?.messages === "function"
+    const hasPromptAsync = typeof session?.promptAsync === "function"
+    const hasPrompt = typeof session?.prompt === "function"
+    const hasStatus = typeof session?.status === "function"
+    return `client=${hasClient}, session=${hasSession}, create=${hasCreate}, messages=${hasMessages}, promptAsync=${hasPromptAsync}, prompt=${hasPrompt}, status=${hasStatus}`
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms))
+  }
+
+  private preview(value: unknown): string {
+    try {
+      const text = JSON.stringify(value)
+      return typeof text === "string" ? text.slice(0, 1200) : String(value)
+    } catch {
+      return String(value)
+    }
+  }
+
+  private isDebugEnabled(): boolean {
+    const runtime = globalThis as { process?: { env?: Record<string, string | undefined> } }
+    return runtime.process?.env?.OPENCODE_KERNEL_DEBUG === "1"
+  }
+
+  private parseStatusEntry(value: unknown): { type?: string; next?: number } | undefined {
+    if (!value || typeof value !== "object") return undefined
+    const source = value as { status?: unknown; type?: unknown; next?: unknown }
+    const status = source.status && typeof source.status === "object" ? (source.status as { type?: unknown; next?: unknown }) : source
+    return {
+      type: typeof status.type === "string" ? status.type : undefined,
+      next: typeof status.next === "number" ? status.next : undefined,
+    }
+  }
+
+  private extractStatusMap(response: unknown): Record<string, { type?: string; next?: number }> {
+    const raw = (response as { data?: unknown } | undefined)?.data ?? response
+    if (!raw) return {}
+    if (Array.isArray(raw)) {
+      const mapped = raw.reduce<Record<string, { type?: string; next?: number }>>((acc, item) => {
+        if (!item || typeof item !== "object") return acc
+        const record = item as { sessionID?: unknown; id?: unknown }
+        const sessionID = typeof record.sessionID === "string" ? record.sessionID : typeof record.id === "string" ? record.id : undefined
+        if (!sessionID) return acc
+        const entry = this.parseStatusEntry(item)
+        if (entry) acc[sessionID] = entry
+        return acc
+      }, {})
+      return mapped
+    }
+    if (typeof raw !== "object") return {}
+    const entries = Object.entries(raw as Record<string, unknown>)
+    const mapped: Record<string, { type?: string; next?: number }> = {}
+    for (const [key, value] of entries) {
+      const entry = this.parseStatusEntry(value)
+      if (entry) mapped[key] = entry
+    }
+    return mapped
+  }
+
+  private async waitForSessionIdle(sessionID: string): Promise<WaitDiagnostics> {
+    const diagnostics: WaitDiagnostics = {
+      polls: 0,
+      seenSession: false,
+      lastStatus: "unknown",
+      lastRaw: "",
+    }
+    const session = this.client?.session
+    if (!session || typeof session.status !== "function") {
+      await this.sleep(800)
+      diagnostics.lastStatus = "status_unavailable"
+      return diagnostics
+    }
+
+    const timeoutAt = Date.now() + 600000
+    let missingCount = 0
+    while (Date.now() < timeoutAt) {
+      diagnostics.polls += 1
+      const response = await session.status({} as unknown).catch(() => undefined)
+      const statusMap = this.extractStatusMap(response)
+      const current = statusMap[sessionID]
+      diagnostics.lastRaw = this.preview(response)
+      if (!current) {
+        diagnostics.lastStatus = "missing"
+        missingCount += 1
+        if (this.isDebugEnabled()) {
+          console.log(`[kernel.wait] session=${sessionID} response=${diagnostics.lastRaw} current=missing`)
+        }
+        if (missingCount >= 6) {
+          await this.sleep(1200)
+          return diagnostics
+        }
+        await this.sleep(500)
+        continue
+      }
+      diagnostics.seenSession = true
+      diagnostics.lastStatus = current.type ?? "unknown"
+      if (this.isDebugEnabled()) {
+        console.log(`[kernel.wait] session=${sessionID} response=${diagnostics.lastRaw} current=${this.preview(current)}`)
+      }
+      if (current.type === "idle") return diagnostics
+      const wait = current.type === "retry" && typeof current.next === "number" ? Math.max(300, current.next) : 500
+      await this.sleep(wait)
+    }
+    diagnostics.lastStatus = `${diagnostics.lastStatus}|timeout`
+    return diagnostics
+  }
+
+  private async sendPrompt(input: unknown): Promise<void> {
+    const session = this.client?.session
+    if (session && typeof session.promptAsync === "function") {
+      await session.promptAsync(input)
+      return
+    }
+    if (session && typeof session.prompt === "function") {
+      await session.prompt(input)
+      return
+    }
+    throw new Error(`Runtime client unavailable for prompt dispatch. ${this.describeClientCapabilities()}`)
+  }
+
   private async getLatestAssistantText(sessionID: string): Promise<string> {
     if (!this.client) return ""
-    const response = (await this.client.session.messages({
+    const response = await this.client.session.messages({
       path: { id: sessionID },
-    } as unknown)) as { data?: Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }> }
-    const messages = response.data ?? []
-    const assistant = [...messages].reverse().find((m) => m.info?.role === "assistant")
+    } as unknown)
+    const raw = (response as { data?: unknown } | undefined)?.data ?? response
+    const messages = Array.isArray(raw) ? raw : []
+    const assistant = [...messages].reverse().find((m) => {
+      const role = (m as { info?: { role?: string }; role?: string }).info?.role ?? (m as { role?: string }).role
+      return role === "assistant"
+    }) as { parts?: Array<{ type?: string; text?: string }> } | undefined
     if (!assistant) return ""
     return (assistant.parts ?? [])
       .filter((part) => part.type === "text")
@@ -78,13 +215,21 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
             status: "running",
           })
 
-          this.client.session.promptAsync(promptBody)
+          this.sendPrompt(promptBody)
             .then(async () => {
+              const waitDiagnostics = await this.waitForSessionIdle(sessionID)
               const output = await this.getLatestAssistantText(sessionID)
               const current = this.backgroundSessions.get(task.id)
               if (!current || current.status === "cancelled") return
               current.status = "completed"
-              current.result = output || `Task completed.\nSession ID: ${sessionID}`
+              current.result =
+                output ||
+                [
+                  `Task completed.`,
+                  `Session ID: ${sessionID}`,
+                  `Wait: polls=${waitDiagnostics.polls}, seenSession=${waitDiagnostics.seenSession}, lastStatus=${waitDiagnostics.lastStatus}`,
+                  `StatusRaw: ${waitDiagnostics.lastRaw || "n/a"}`,
+                ].join("\n")
               this.runtime.completeTask(task.id, current.result)
             })
             .catch((error) => {
@@ -108,7 +253,8 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
         }
 
         try {
-          await this.client.session.promptAsync(promptBody)
+          await this.sendPrompt(promptBody)
+          const waitDiagnostics = await this.waitForSessionIdle(sessionID)
           const output = await this.getLatestAssistantText(sessionID)
           const result = [
             `Profile: ${this.profile.name}`,
@@ -116,7 +262,12 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
             `Mode: direct`,
             `Session ID: ${sessionID}`,
             "",
-            output || "(No text output)",
+            output ||
+              [
+                `(No text output)`,
+                `Wait: polls=${waitDiagnostics.polls}, seenSession=${waitDiagnostics.seenSession}, lastStatus=${waitDiagnostics.lastStatus}`,
+                `StatusRaw: ${waitDiagnostics.lastRaw || "n/a"}`,
+              ].join("\n"),
           ].join("\n")
           this.runtime.completeTask(task.id, result)
           return { output: result, taskID: task.id }
@@ -135,6 +286,8 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
           `Task ID: ${task.id}`,
           `Profile: ${this.profile.name}`,
           `Agent: ${input.subagentType}`,
+          this.client ? `Warning: missing sessionID, task not dispatched to subagent.` : `Warning: runtime client unavailable, task not dispatched to subagent.`,
+          `Runtime: ${this.describeClientCapabilities()}`,
         ].join("\n"),
         taskID: task.id,
       }
@@ -145,6 +298,8 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
       `Agent: ${input.subagentType}`,
       `Mode: direct`,
       `Task: ${input.prompt}`,
+      this.client ? `Warning: missing sessionID, ran fallback output only.` : `Warning: runtime client unavailable, ran fallback output only.`,
+      `Runtime: ${this.describeClientCapabilities()}`,
     ].join("\n")
 
     this.runtime.completeTask(task.id, result)

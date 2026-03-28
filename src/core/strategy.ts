@@ -37,8 +37,10 @@ export interface LegacyBridgeModuleConfig {
 export interface RuntimeSessionClient {
   session: {
     create(input: unknown): Promise<unknown>
-    promptAsync(input: unknown): Promise<unknown>
+    promptAsync?(input: unknown): Promise<unknown>
+    prompt?(input: unknown): Promise<unknown>
     messages(input: unknown): Promise<unknown>
+    status?(input?: unknown): Promise<unknown>
   }
 }
 
