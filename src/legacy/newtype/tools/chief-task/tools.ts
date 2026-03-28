@@ -180,10 +180,10 @@ export function createChiefTask(options: ChiefTaskToolOptions): ToolDefinition {
     async execute(args: ChiefTaskArgs, toolContext) {
       const ctx = toolContext as ToolContextWithMetadata
       if (args.run_in_background === undefined) {
-        return `‚ùå Invalid arguments: 'run_in_background' parameter is REQUIRED. Use run_in_background=false for task delegation, run_in_background=true for parallel research.`
+        return `‚ù?Invalid arguments: 'run_in_background' parameter is REQUIRED. Use run_in_background=false for task delegation, run_in_background=true for parallel research.`
       }
       if (args.skills === undefined) {
-        return `‚ùå Invalid arguments: 'skills' parameter is REQUIRED. Use skills=[] if no skills needed.`
+        return `‚ù?Invalid arguments: 'skills' parameter is REQUIRED. Use skills=[] if no skills needed.`
       }
       const runInBackground = args.run_in_background === true
 
@@ -192,7 +192,7 @@ export function createChiefTask(options: ChiefTaskToolOptions): ToolDefinition {
         const { resolved, notFound } = resolveMultipleSkills(args.skills)
         if (notFound.length > 0) {
           const available = createBuiltinSkills().map(s => s.name).join(", ")
-          return `‚ùå Skills not found: ${notFound.join(", ")}. Available: ${available}`
+          return `‚ù?Skills not found: ${notFound.join(", ")}. Available: ${available}`
         }
         skillContent = Array.from(resolved.values()).join("\n\n")
       }
@@ -233,7 +233,7 @@ Agent continues with full previous context preserved.
 Use \`background_output\` with task_id="${task.id}" to check progress.`
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            return `‚ùå Failed to resume task: ${message}`
+            return `‚ù?Failed to resume task: ${message}`
           }
         }
 
@@ -267,7 +267,7 @@ Use \`background_output\` with task_id="${task.id}" to check progress.`
             toastManager.removeTask(taskId)
           }
           const errorMessage = promptError instanceof Error ? promptError.message : String(promptError)
-          return `‚ùå Failed to send resume prompt: ${errorMessage}\n\nSession ID: ${args.resume}`
+          return `‚ù?Failed to send resume prompt: ${errorMessage}\n\nSession ID: ${args.resume}`
         }
 
         const messagesResult = await client.session.messages({
@@ -278,7 +278,7 @@ Use \`background_output\` with task_id="${task.id}" to check progress.`
           if (toastManager) {
             toastManager.removeTask(taskId)
           }
-          return `‚ùå Error fetching result: ${messagesResult.error}\n\nSession ID: ${args.resume}`
+          return `‚ù?Error fetching result: ${messagesResult.error}\n\nSession ID: ${args.resume}`
         }
 
         const messages = ((messagesResult as { data?: unknown }).data ?? messagesResult) as Array<{
@@ -296,7 +296,7 @@ Use \`background_output\` with task_id="${task.id}" to check progress.`
         }
 
         if (!lastMessage) {
-          return `‚ùå No assistant response found.\n\nSession ID: ${args.resume}`
+          return `‚ù?No assistant response found.\n\nSession ID: ${args.resume}`
         }
 
         const textParts = lastMessage?.parts?.filter((p) => p.type === "text") ?? []
@@ -314,11 +314,11 @@ ${textContent || "(No text output)"}`
       }
 
       if (args.category && args.subagent_type) {
-        return `‚ùå Invalid arguments: Provide EITHER category OR subagent_type, not both.`
+        return `‚ù?Invalid arguments: Provide EITHER category OR subagent_type, not both.`
       }
 
       if (!args.category && !args.subagent_type) {
-        return `‚ùå Invalid arguments: Must provide either category or subagent_type.`
+        return `‚ù?Invalid arguments: Must provide either category or subagent_type.`
       }
 
       let agentToUse: string
@@ -328,7 +328,7 @@ ${textContent || "(No text output)"}`
       if (args.category) {
         const resolved = resolveCategoryConfig(args.category, userCategories)
         if (!resolved) {
-          return `‚ùå Unknown category: "${args.category}". Available: ${Object.keys({ ...DEFAULT_CATEGORIES, ...userCategories }).join(", ")}`
+          return `‚ù?Unknown category: "${args.category}". Available: ${Object.keys({ ...DEFAULT_CATEGORIES, ...userCategories }).join(", ")}`
         }
 
         agentToUse = DEPUTY_AGENT
@@ -337,7 +337,7 @@ ${textContent || "(No text output)"}`
       } else {
         agentToUse = args.subagent_type!.trim()
         if (!agentToUse) {
-          return `‚ùå Agent name cannot be empty.`
+          return `‚ù?Agent name cannot be empty.`
         }
 
         const mappedCategory = AGENT_TO_CATEGORY_MAP[agentToUse]
@@ -362,13 +362,13 @@ ${textContent || "(No text output)"}`
           if (!callableNames.includes(agentToUse)) {
             const isPrimaryAgent = agents.some((a) => a.name === agentToUse && a.mode === "primary")
             if (isPrimaryAgent) {
-              return `‚ùå Cannot call primary agent "${agentToUse}" via chief_task. Primary agents are top-level orchestrators.`
+              return `‚ù?Cannot call primary agent "${agentToUse}" via chief_task. Primary agents are top-level orchestrators.`
             }
 
             const availableAgents = callableNames
               .sort()
               .join(", ")
-            return `‚ùå Unknown agent: "${agentToUse}". Available agents: ${availableAgents}`
+            return `‚ù?Unknown agent: "${agentToUse}". Available agents: ${availableAgents}`
           }
         } catch {
           // If we can't fetch agents, proceed anyway - the session.prompt will fail with a clearer error
@@ -408,7 +408,7 @@ Status: ${task.status}
 System notifies on completion. Use \`background_output\` with task_id="${task.id}" to check.`
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          return `‚ùå Failed to launch task: ${message}`
+          return `‚ù?Failed to launch task: ${message}`
         }
       }
 
@@ -425,7 +425,7 @@ System notifies on completion. Use \`background_output\` with task_id="${task.id
         })
 
         if (createResult.error) {
-          return `‚ùå Failed to create session: ${createResult.error}`
+          return `‚ù?Failed to create session: ${createResult.error}`
         }
 
         const sessionID = createResult.data.id
@@ -468,9 +468,9 @@ System notifies on completion. Use \`background_output\` with task_id="${task.id
           }
           const errorMessage = promptError.message
           if (errorMessage.includes("agent.name") || errorMessage.includes("undefined")) {
-            return `‚ùå Agent "${agentToUse}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\nSession ID: ${sessionID}`
+            return `‚ù?Agent "${agentToUse}" not found. Make sure the agent is registered in your opencode.json or provided by a plugin.\n\nSession ID: ${sessionID}`
           }
-          return `‚ùå Failed to send prompt: ${errorMessage}\n\nSession ID: ${sessionID}`
+          return `‚ù?Failed to send prompt: ${errorMessage}\n\nSession ID: ${sessionID}`
         }
 
         await waitForSessionIdle(client, sessionID)
@@ -480,7 +480,7 @@ System notifies on completion. Use \`background_output\` with task_id="${task.id
           if (toastManager && taskId !== undefined) {
             toastManager.removeTask(taskId)
           }
-          return `‚ùå Error fetching result: ${messageResult.error}\n\nSession ID: ${sessionID}`
+          return `‚ù?Error fetching result: ${messageResult.error}\n\nSession ID: ${sessionID}`
         }
 
         let textContent = messageResult.text
@@ -562,7 +562,7 @@ ${finalOutput || "(No text output)"}`
           subagentSessions.delete(syncSessionID)
         }
         const message = error instanceof Error ? error.message : String(error)
-        return `‚ùå Task failed: ${message}`
+        return `‚ù?Task failed: ${message}`
       }
     },
   })
