@@ -29,11 +29,20 @@ function buildScoringPrompt(dimensions: string[], threshold: number): string {
   return "\n\n<Quality_Assessment>\nAfter completing your task, you MUST evaluate your own work against the following quality dimensions.\nYou MUST output this exact block at the very end of your response:\n\n**QUALITY SCORES:**\n" + dimLines + "\n**OVERALL: <0.00-1.00>**\n\nScore guide:\n- 0.90-1.00: Excellent, highly actionable\n- " + threshold + "-0.89: Passing, meets requirements\n- < " + threshold + ": Needs improvement, rework required\n</Quality_Assessment>"
 }
 
+function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: string[]): Record<string, "allow" | "deny" | "ask"> {
+  if (!allowedMcps) return {}
+  const rules: Record<string, "allow" | "deny" | "ask"> = {}
+  for (const server of allMcpServers) {
+    if (!allowedMcps.includes(server)) rules[server + "_*"] = "deny"
+  }
+  return rules
+}
+
 function mergeAgentsConfig(
   profile: DomainProfile,
   profileConfig: ReturnType<typeof getProfileConfig>
-): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> {
-  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[] }> = {}
+): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[] }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[] }> = {}
 
   const dimensions = profileConfig?.quality?.dimensions ?? profile.quality.dimensions
   const threshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
@@ -43,6 +52,7 @@ function mergeAgentsConfig(
     model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
     prompt: profile.prompts.chief,
     skills: profileConfig?.agents?.chief?.skills,
+    mcp: profileConfig?.agents?.chief?.mcp,
   }
 
   agents.deputy = {
@@ -50,6 +60,7 @@ function mergeAgentsConfig(
     prompt: profile.prompts.deputy + scoringPrompt,
     temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
     skills: profileConfig?.agents?.deputy?.skills,
+    mcp: profileConfig?.agents?.deputy?.mcp,
   }
 
   if (profileConfig?.agents?.explore?.model) {
@@ -57,6 +68,7 @@ function mergeAgentsConfig(
       model: profileConfig.agents.explore.model,
       prompt: "You are a code explorer." + scoringPrompt,
       skills: profileConfig.agents.explore.skills,
+      mcp: profileConfig.agents.explore.mcp,
     }
   }
 
@@ -65,6 +77,7 @@ function mergeAgentsConfig(
       model: profileConfig.agents.general.model,
       prompt: "You are a general purpose assistant." + scoringPrompt,
       skills: profileConfig.agents.general.skills,
+      mcp: profileConfig.agents.general.mcp,
     }
   }
 
@@ -77,6 +90,7 @@ function mergeAgentsConfig(
         prompt: "You are a " + agentName + "." + scoringPrompt,
         temperature: agentConfig.temperature,
         skills: agentConfig.skills,
+        mcp: agentConfig.mcp,
       }
     }
   }
@@ -167,10 +181,25 @@ export function createOpenCodeAdapter(
   const configHook: Hooks["config"] = async (config) => {
     const current = config as Record<string, unknown>
     const currentAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
-    current.agent = {
-      ...currentAgents,
-      ...agents,
+    const allMcpServers = current.mcp ? Object.keys(current.mcp as object) : []
+    const finalAgents: Record<string, unknown> = { ...currentAgents }
+
+    for (const [name, cfg] of Object.entries(agents)) {
+      const baseAgent = (finalAgents[name] as Record<string, unknown> | undefined) ?? {}
+      const mcpDenyRules = buildMcpDenyRules(cfg.mcp, allMcpServers)
+      const newPermission = {
+        ...((baseAgent.permission as Record<string, unknown> | undefined) ?? {}),
+        ...mcpDenyRules,
+      }
+      const { mcp: _mcp, skills: _skills, ...agentCore } = cfg
+      finalAgents[name] = {
+        ...baseAgent,
+        ...agentCore,
+        permission: Object.keys(newPermission).length > 0 ? newPermission : undefined,
+      }
     }
+
+    current.agent = finalAgents
     current.default_agent = "chief"
   }
 
