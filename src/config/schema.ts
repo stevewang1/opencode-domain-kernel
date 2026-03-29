@@ -6,7 +6,8 @@ export const AgentConfigSchema = z.object({
   prompt: z.string().optional(),
   prompt_append: z.string().optional(),
   skills: z.array(z.string()).optional(),
-  mcp: z.array(z.string()).optional(), // 新增：允许使用的 MCP 服务器名称列表
+  mcp: z.array(z.string()).optional(), // 允许使用的 MCP 服务器名称列表
+  permission: z.record(z.string(), z.enum(["allow", "deny", "ask"])).optional(), // 新增：底层物理权限控制
   description: z.string().optional(),
   mode: z.enum(["subagent", "primary", "all"]).optional(),
 })

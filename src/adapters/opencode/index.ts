@@ -38,46 +38,96 @@ function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: str
   return rules
 }
 
+function injectModelPersona(agentName: string, model: string | undefined, basePrompt: string, description?: string): string {
+  let prompt = basePrompt;
+  if (description) {
+    prompt = '<Role_Description>\n' + description + '\n</Role_Description>\n\n' + prompt;
+  }
+  const modelLower = model ? model.toLowerCase() : '';
+
+  if (modelLower.includes('gemini')) {
+    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
+              '## YOU MUST USE TOOLS FOR EVERY ACTION. THIS IS NOT OPTIONAL.\n' +
+              '**YOUR FAILURE MODE**: You believe you can reason through file contents, task status, and verification without actually calling tools. You CANNOT. Your internal state about files you \'already know\' is UNRELIABLE.\n' +
+              '1. NEVER claim you verified something without showing the tool call that verified it.\n' +
+              '2. NEVER reason about what a changed file \'probably looks like.\' Call Read on it.\n' +
+              '</CRITICAL_MODEL_INSTRUCTION>';
+  }
+  
+  if (modelLower.includes('glm') || modelLower.includes('qwen') || modelLower.includes('deepseek')) {
+    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
+              'Strictly adhere to the required output formats and tool schemas. Do NOT output markdown code blocks unless requested. Do NOT hallucinate parameters. Focus only on the requested task.\n' +
+              '</CRITICAL_MODEL_INSTRUCTION>';
+  }
+
+  if (agentName === 'chief') {
+    prompt += '\n\n<ROLE_ENFORCEMENT>\n' +
+              'CRITICAL RULE: YOU MUST NEVER WRITE CODE, EXECUTE COMMANDS, OR DO THE WORK YOURSELF.\n' +
+              'You are Atlas - Master Orchestrator. Role: Conductor, not musician. General, not soldier.\n' +
+              'You DELEGATE, COORDINATE, and VERIFY. Your ONLY job is to break down the request, create a plan using todowrite, and delegate EVERY single implementation step to subagents using \'chief_task\'.\n' +
+              'When subagents return, you MUST verify their work. Remember: Subagents lie, always verify using read or lsp tools.\n' +
+              '</ROLE_ENFORCEMENT>';
+  } else if (agentName === 'deputy' || agentName === 'general' || agentName === 'explore' || agentName === 'researcher') {
+    prompt += '\n\n<ROLE_ENFORCEMENT>\n' +
+              'You are an IMPLEMENTER. You DO NOT delegate tasks. You use your available tools to complete the work assigned to you directly and completely. You NEVER use \'chief_task\'.\n' +
+              '</ROLE_ENFORCEMENT>';
+  }
+  return prompt;
+}
+
 function mergeAgentsConfig(
   profile: DomainProfile,
   profileConfig: ReturnType<typeof getProfileConfig>
-): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[] }> {
-  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[] }> = {}
+): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> = {}
 
   const dimensions = profileConfig?.quality?.dimensions ?? profile.quality.dimensions
   const threshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
   const scoringPrompt = buildScoringPrompt(dimensions, threshold)
 
+  const defaultChiefPerms = {
+    "bash": "deny" as const,
+    "edit_*": "deny" as const,
+  }
+
+  const defaultSubagentPerms = {
+    "chief_task": "deny" as const,
+  }
+
   agents.chief = {
     model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
-    prompt: profile.prompts.chief,
+    prompt: injectModelPersona("chief", profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model, profile.prompts.chief, profileConfig?.agents?.chief?.description),
     skills: profileConfig?.agents?.chief?.skills,
     mcp: profileConfig?.agents?.chief?.mcp,
+    permission: { ...defaultChiefPerms, ...(profileConfig?.agents?.chief?.permission || {}) }
   }
 
   agents.deputy = {
     model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
-    prompt: profile.prompts.deputy + scoringPrompt,
+    prompt: injectModelPersona("deputy", profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model, profile.prompts.deputy + scoringPrompt, profileConfig?.agents?.deputy?.description),
     temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
     skills: profileConfig?.agents?.deputy?.skills,
     mcp: profileConfig?.agents?.deputy?.mcp,
+    permission: { ...defaultSubagentPerms, ...(profileConfig?.agents?.deputy?.permission || {}) }
   }
 
   if (profileConfig?.agents?.explore?.model) {
     agents.explore = {
       model: profileConfig.agents.explore.model,
-      prompt: "You are a code explorer." + scoringPrompt,
+      prompt: injectModelPersona("explore", profileConfig.agents.explore.model, "You are a code explorer." + scoringPrompt, profileConfig.agents.explore.description),
       skills: profileConfig.agents.explore.skills,
       mcp: profileConfig.agents.explore.mcp,
+      permission: { ...defaultSubagentPerms, ...(profileConfig.agents.explore.permission || {}) }
     }
   }
 
   if (profileConfig?.agents?.general?.model) {
     agents.general = {
       model: profileConfig.agents.general.model,
-      prompt: "You are a general purpose assistant." + scoringPrompt,
+      prompt: injectModelPersona("general", profileConfig.agents.general.model, "You are a general purpose assistant." + scoringPrompt, profileConfig.agents.general.description),
       skills: profileConfig.agents.general.skills,
       mcp: profileConfig.agents.general.mcp,
+      permission: { ...defaultSubagentPerms, ...(profileConfig.agents.general.permission || {}) }
     }
   }
 
@@ -87,16 +137,18 @@ function mergeAgentsConfig(
     if (agentConfig?.model) {
       agents[agentName] = {
         model: agentConfig.model,
-        prompt: "You are a " + agentName + "." + scoringPrompt,
+        prompt: injectModelPersona(agentName, agentConfig.model, "You are a " + agentName + "." + scoringPrompt, agentConfig.description),
         temperature: agentConfig.temperature,
         skills: agentConfig.skills,
         mcp: agentConfig.mcp,
+        permission: { ...defaultSubagentPerms, ...(agentConfig.permission || {}) }
       }
     }
   }
 
   return agents
 }
+
 
 export function createOpenCodeAdapter(
   _ctx: PluginInput,
@@ -187,11 +239,15 @@ export function createOpenCodeAdapter(
     for (const [name, cfg] of Object.entries(agents)) {
       const baseAgent = (finalAgents[name] as Record<string, unknown> | undefined) ?? {}
       const mcpDenyRules = buildMcpDenyRules(cfg.mcp, allMcpServers)
+      const configuredPermission = cfg.permission ?? {}
+      
       const newPermission = {
         ...((baseAgent.permission as Record<string, unknown> | undefined) ?? {}),
         ...mcpDenyRules,
+        ...configuredPermission,
       }
-      const { mcp: _mcp, skills: _skills, ...agentCore } = cfg
+      
+      const { mcp: _mcp, skills: _skills, permission: _perm, ...agentCore } = cfg
       finalAgents[name] = {
         ...baseAgent,
         ...agentCore,
@@ -202,6 +258,7 @@ export function createOpenCodeAdapter(
     current.agent = finalAgents
     current.default_agent = "chief"
   }
+
 
   const afterHook: Hooks["tool.execute.after"] = async (input, output) => {
     if (disabledSet.has("chief-orchestrator")) return
