@@ -1,6 +1,16 @@
 {
   "name": "opencode-domain-kernel",
   "version": "0.1.0",
+  "description": "Domain-aware orchestration plugin for OpenCode with profile routing and runtime strategies.",
+  "keywords": [
+    "opencode",
+    "plugin",
+    "agent",
+    "orchestration",
+    "routing"
+  ],
+  "author": "stevewang1",
+  "license": "MIT",
   "private": false,
   "repository": {
     "type": "git",
@@ -11,6 +21,9 @@
     "url": "https://github.com/stevewang1/opencode-domain-kernel/issues"
   },
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
