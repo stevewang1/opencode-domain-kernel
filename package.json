@@ -1,5 +1,5 @@
 {
-  "name": "opencode-domain-kernel",
+  "name": "@zikunwang615/opencode-domain-kernel",
   "version": "0.1.0",
   "description": "Domain-aware orchestration plugin for OpenCode with profile routing and runtime strategies.",
   "keywords": [
