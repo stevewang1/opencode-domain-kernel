@@ -4,6 +4,7 @@ import { resolveProfile } from "./profiles/index.js"
 
 export function createDomainKernelPlugin(domain: DomainName, options?: Omit<KernelConfig, "profile">) {
   const profile = resolveProfile(domain)
+  console.log("[domain-kernel] resolved profile:", profile.name)
   return createKernelPlugin({
     ...options,
     profile,

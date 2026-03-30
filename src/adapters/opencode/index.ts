@@ -260,6 +260,46 @@ export function createOpenCodeAdapter(
   })
 
   const disabledSet = new Set(disabledHooks)
+  let profileLogged = false
+  let profileToastShown = false
+  const isPrintLogsMode = process.argv.includes("--print-logs")
+
+  const profileMessage = "[domain-kernel] active profile: " + profileName + " (cwd: " + (_ctx.directory ?? process.cwd()) + ")"
+
+  const emitProfileLog = () => {
+    if (profileLogged) return
+    profileLogged = true
+    console.log(profileMessage)
+  }
+
+  const emitProfileToast = () => {
+    if (isPrintLogsMode) return
+    if (profileToastShown) return
+    profileToastShown = true
+    setTimeout(() => {
+      void _ctx.client.tui.showToast({
+        body: {
+          message: profileMessage,
+          variant: "info",
+          duration: 5000,
+        },
+      }).catch(() => {
+        void _ctx.client.tui.publish({
+          body: {
+            type: "tui.toast.show",
+            properties: {
+              message: profileMessage,
+              variant: "info",
+              duration: 5000,
+            },
+          },
+        }).catch((error) => {
+          profileToastShown = false
+          console.log("[domain-kernel] tui notification failed", error)
+        })
+      })
+    }, 300)
+  }
 
   const configHook: Hooks["config"] = async (config) => {
     const current = config as Record<string, unknown>
@@ -288,6 +328,8 @@ export function createOpenCodeAdapter(
 
     current.agent = finalAgents
     current.default_agent = "chief"
+    emitProfileLog()
+    emitProfileToast()
   }
 
 
@@ -305,9 +347,23 @@ export function createOpenCodeAdapter(
       output.output,
     ].join("\n")
     output.output = rendered
+    emitProfileLog()
+    emitProfileToast()
+  }
+
+  const eventHook: Hooks["event"] = async (input) => {
+    if (
+      input.event.type === "server.connected"
+      || input.event.type === "session.created"
+      || input.event.type === "session.updated"
+    ) {
+      emitProfileLog()
+      emitProfileToast()
+    }
   }
 
   return {
+    event: eventHook,
     config: configHook,
     tool: {
       chief_task: chiefTask,
