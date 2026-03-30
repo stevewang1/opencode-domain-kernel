@@ -152,8 +152,8 @@ function injectModelPersona(agentName: string, model: string | undefined, basePr
 function mergeAgentsConfig(
   profile: DomainProfile,
   profileConfig: ReturnType<typeof getProfileConfig>
-): Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> {
-  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> = {}
+): Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> = {}
 
   const dimensions = profileConfig?.quality?.dimensions ?? profile.quality.dimensions
   const threshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
@@ -181,6 +181,7 @@ function mergeAgentsConfig(
   const chiefMcp = normalizeNameList(profileConfig?.agents?.chief?.mcp)
   agents.chief = {
     model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
+    mode: profileConfig?.agents?.chief?.mode,
     prompt: injectSkillScope(
       "chief",
       injectModelPersona("chief", profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model, profile.prompts.chief, profileConfig?.agents?.chief?.description),
@@ -195,6 +196,7 @@ function mergeAgentsConfig(
   const deputyMcp = normalizeNameList(profileConfig?.agents?.deputy?.mcp)
   agents.deputy = {
     model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
+    mode: profileConfig?.agents?.deputy?.mode,
     prompt: injectSkillScope(
       "deputy",
       injectModelPersona("deputy", profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model, profile.prompts.deputy + scoringPrompt, profileConfig?.agents?.deputy?.description),
@@ -211,6 +213,8 @@ function mergeAgentsConfig(
     const exploreMcp = normalizeNameList(profileConfig.agents.explore.mcp)
     agents.explore = {
       model: profileConfig.agents.explore.model,
+      mode: profileConfig.agents.explore.mode ?? "all",
+      hidden: false,
       prompt: injectSkillScope(
         "explore",
         injectModelPersona("explore", profileConfig.agents.explore.model, "You are a code explorer." + scoringPrompt, profileConfig.agents.explore.description),
@@ -227,6 +231,8 @@ function mergeAgentsConfig(
     const generalMcp = normalizeNameList(profileConfig.agents.general.mcp)
     agents.general = {
       model: profileConfig.agents.general.model,
+      mode: profileConfig.agents.general.mode ?? "all",
+      hidden: false,
       prompt: injectSkillScope(
         "general",
         injectModelPersona("general", profileConfig.agents.general.model, "You are a general purpose assistant." + scoringPrompt, profileConfig.agents.general.description),
@@ -246,6 +252,7 @@ function mergeAgentsConfig(
       const agentMcp = normalizeNameList(agentConfig.mcp)
       agents[agentName] = {
         model: agentConfig.model,
+        mode: agentConfig.mode,
         prompt: injectSkillScope(
           agentName,
           injectModelPersona(agentName, agentConfig.model, "You are a " + agentName + "." + scoringPrompt, agentConfig.description),
