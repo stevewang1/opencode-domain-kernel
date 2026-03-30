@@ -29,6 +29,29 @@ function buildScoringPrompt(dimensions: string[], threshold: number): string {
   return "\n\n<Quality_Assessment>\nAfter completing your task, you MUST evaluate your own work against the following quality dimensions.\nYou MUST output this exact block at the very end of your response:\n\n**QUALITY SCORES:**\n" + dimLines + "\n**OVERALL: <0.00-1.00>**\n\nScore guide:\n- 0.90-1.00: Excellent, highly actionable\n- " + threshold + "-0.89: Passing, meets requirements\n- < " + threshold + ": Needs improvement, rework required\n</Quality_Assessment>"
 }
 
+const CHIEF_BLOCKED_WEB_SEARCH_TOOLS = new Set([
+  "search",
+  "web_search",
+  "search_engine",
+  "news_search",
+  "tavily_search",
+  "tavily_extract",
+  "tavily_crawl",
+  "mcp_tavily_tavily_search",
+  "mcp_tavily_tavily_extract",
+  "mcp_tavily_tavily_crawl",
+])
+
+function isChiefBlockedWebSearchTool(toolName: string): boolean {
+  const normalized = toolName.toLowerCase()
+  if (CHIEF_BLOCKED_WEB_SEARCH_TOOLS.has(normalized)) return true
+  if (normalized.includes("tavily")) return true
+  if (normalized.includes("web") && normalized.includes("search")) return true
+  if (normalized.includes("news") && normalized.includes("search")) return true
+  if (normalized.includes("search_engine")) return true
+  return false
+}
+
 function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: string[]): Record<string, "allow" | "deny" | "ask"> {
   if (!allowedMcps) return {}
   const rules: Record<string, "allow" | "deny" | "ask"> = {}
@@ -36,6 +59,18 @@ function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: str
     if (!allowedMcps.includes(server)) rules[server + "_*"] = "deny"
   }
   return rules
+}
+
+function normalizeNameList(values: string[] | undefined): string[] | undefined {
+  if (!values) return undefined
+  const normalized = Array.from(
+    new Set(
+      values
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    )
+  )
+  return normalized
 }
 
 function normalizePermissionRules(
@@ -46,6 +81,10 @@ function normalizePermissionRules(
   if (next.edit && !next["edit_*"]) {
     next["edit_*"] = next.edit
     delete next.edit
+  }
+  if (next.task && !next.chief_task) {
+    next.chief_task = next.task
+    delete next.task
   }
   return next
 }
@@ -58,6 +97,12 @@ function resolveExecutionStrategy(
   if (!configuredStrategy) return undefined
   if (configuredStrategy === "builtin-legacy-bridge") return "runtime"
   return configuredStrategy
+}
+
+function injectSkillScope(agentName: string, prompt: string, skills: string[] | undefined): string {
+  if (!skills) return prompt
+  const listText = skills.length > 0 ? skills.join(", ") : "(none)"
+  return prompt + '\n\n<SKILL_SCOPE>\nAgent: ' + agentName + '\nAllowed skills: ' + listText + '\nWhen users ask which skills you have, answer ONLY with this list.\nDo not claim access to skills outside this list.\n</SKILL_SCOPE>'
 }
 
 function injectModelPersona(agentName: string, model: string | undefined, basePrompt: string, description?: string): string {
@@ -79,6 +124,13 @@ function injectModelPersona(agentName: string, model: string | undefined, basePr
   if (modelLower.includes('glm') || modelLower.includes('qwen') || modelLower.includes('deepseek')) {
     prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
               'Strictly adhere to the required output formats and tool schemas. Do NOT output markdown code blocks unless requested. Do NOT hallucinate parameters. Focus only on the requested task.\n' +
+              '</CRITICAL_MODEL_INSTRUCTION>';
+  }
+
+  if (modelLower.includes("kimi") || modelLower.includes("moonshot")) {
+    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
+              'When you are chief, your first substantive action must be delegation via chief_task for execution work (including web/news search).\n' +
+              'Never claim that you already searched anything unless there is explicit tool evidence from delegated tasks.\n' +
               '</CRITICAL_MODEL_INSTRUCTION>';
   }
 
@@ -110,45 +162,78 @@ function mergeAgentsConfig(
   const defaultChiefPerms = {
     "bash": "deny" as const,
     "edit_*": "deny" as const,
+    "search": "deny" as const,
+    "web_search": "deny" as const,
+    "search_engine": "deny" as const,
+    "news_search": "deny" as const,
+    "tavily_search": "deny" as const,
+    "tavily_extract": "deny" as const,
+    "tavily_crawl": "deny" as const,
+    "mcp_tavily_*": "deny" as const,
+    "mcp_Tavily_*": "deny" as const,
   }
 
   const defaultSubagentPerms = {
     "chief_task": "deny" as const,
   }
 
+  const chiefSkills = normalizeNameList(profileConfig?.agents?.chief?.skills)
+  const chiefMcp = normalizeNameList(profileConfig?.agents?.chief?.mcp)
   agents.chief = {
     model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
-    prompt: injectModelPersona("chief", profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model, profile.prompts.chief, profileConfig?.agents?.chief?.description),
-    skills: profileConfig?.agents?.chief?.skills,
-    mcp: profileConfig?.agents?.chief?.mcp,
+    prompt: injectSkillScope(
+      "chief",
+      injectModelPersona("chief", profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model, profile.prompts.chief, profileConfig?.agents?.chief?.description),
+      chiefSkills
+    ),
+    skills: chiefSkills,
+    mcp: chiefMcp,
     permission: { ...defaultChiefPerms, ...(profileConfig?.agents?.chief?.permission || {}) }
   }
 
+  const deputySkills = normalizeNameList(profileConfig?.agents?.deputy?.skills)
+  const deputyMcp = normalizeNameList(profileConfig?.agents?.deputy?.mcp)
   agents.deputy = {
     model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
-    prompt: injectModelPersona("deputy", profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model, profile.prompts.deputy + scoringPrompt, profileConfig?.agents?.deputy?.description),
+    prompt: injectSkillScope(
+      "deputy",
+      injectModelPersona("deputy", profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model, profile.prompts.deputy + scoringPrompt, profileConfig?.agents?.deputy?.description),
+      deputySkills
+    ),
     temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
-    skills: profileConfig?.agents?.deputy?.skills,
-    mcp: profileConfig?.agents?.deputy?.mcp,
+    skills: deputySkills,
+    mcp: deputyMcp,
     permission: { ...defaultSubagentPerms, ...(profileConfig?.agents?.deputy?.permission || {}) }
   }
 
   if (profileConfig?.agents?.explore?.model) {
+    const exploreSkills = normalizeNameList(profileConfig.agents.explore.skills)
+    const exploreMcp = normalizeNameList(profileConfig.agents.explore.mcp)
     agents.explore = {
       model: profileConfig.agents.explore.model,
-      prompt: injectModelPersona("explore", profileConfig.agents.explore.model, "You are a code explorer." + scoringPrompt, profileConfig.agents.explore.description),
-      skills: profileConfig.agents.explore.skills,
-      mcp: profileConfig.agents.explore.mcp,
+      prompt: injectSkillScope(
+        "explore",
+        injectModelPersona("explore", profileConfig.agents.explore.model, "You are a code explorer." + scoringPrompt, profileConfig.agents.explore.description),
+        exploreSkills
+      ),
+      skills: exploreSkills,
+      mcp: exploreMcp,
       permission: { ...defaultSubagentPerms, ...(profileConfig.agents.explore.permission || {}) }
     }
   }
 
   if (profileConfig?.agents?.general?.model) {
+    const generalSkills = normalizeNameList(profileConfig.agents.general.skills)
+    const generalMcp = normalizeNameList(profileConfig.agents.general.mcp)
     agents.general = {
       model: profileConfig.agents.general.model,
-      prompt: injectModelPersona("general", profileConfig.agents.general.model, "You are a general purpose assistant." + scoringPrompt, profileConfig.agents.general.description),
-      skills: profileConfig.agents.general.skills,
-      mcp: profileConfig.agents.general.mcp,
+      prompt: injectSkillScope(
+        "general",
+        injectModelPersona("general", profileConfig.agents.general.model, "You are a general purpose assistant." + scoringPrompt, profileConfig.agents.general.description),
+        generalSkills
+      ),
+      skills: generalSkills,
+      mcp: generalMcp,
       permission: { ...defaultSubagentPerms, ...(profileConfig.agents.general.permission || {}) }
     }
   }
@@ -157,12 +242,18 @@ function mergeAgentsConfig(
   for (const agentName of otherAgents) {
     const agentConfig = profileConfig?.agents?.[agentName]
     if (agentConfig?.model) {
+      const agentSkills = normalizeNameList(agentConfig.skills)
+      const agentMcp = normalizeNameList(agentConfig.mcp)
       agents[agentName] = {
         model: agentConfig.model,
-        prompt: injectModelPersona(agentName, agentConfig.model, "You are a " + agentName + "." + scoringPrompt, agentConfig.description),
+        prompt: injectSkillScope(
+          agentName,
+          injectModelPersona(agentName, agentConfig.model, "You are a " + agentName + "." + scoringPrompt, agentConfig.description),
+          agentSkills
+        ),
         temperature: agentConfig.temperature,
-        skills: agentConfig.skills,
-        mcp: agentConfig.mcp,
+        skills: agentSkills,
+        mcp: agentMcp,
         permission: { ...defaultSubagentPerms, ...(agentConfig.permission || {}) }
       }
     }
@@ -178,19 +269,30 @@ export function createOpenCodeAdapter(
   disabledHooks: string[],
   execution?: ExecutionOptions
 ): Hooks {
-  const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
-  const configuredDefaultProfile = userConfig.defaultProfile || "content"
   const profileName = profile.name
-  const profileConfig = getProfileConfig(userConfig, profileName)
-    ?? getProfileConfig(userConfig, configuredDefaultProfile)
-  const effectiveProfile = {
-    ...profile,
-    execution: {
-      ...profile.execution,
-      strategy: resolveExecutionStrategy(profileConfig, userConfig) ?? profile.execution.strategy,
-    },
-  } satisfies DomainProfile
-  const agents = mergeAgentsConfig(effectiveProfile, profileConfig)
+  const resolveActiveProfileConfig = () => {
+    const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
+    const configuredDefaultProfile = userConfig.defaultProfile || "content"
+    const profileConfig = getProfileConfig(userConfig, profileName)
+      ?? getProfileConfig(userConfig, configuredDefaultProfile)
+    const effectiveProfile = {
+      ...profile,
+      execution: {
+        ...profile.execution,
+        strategy: resolveExecutionStrategy(profileConfig, userConfig) ?? profile.execution.strategy,
+      },
+    } satisfies DomainProfile
+    const agents = mergeAgentsConfig(effectiveProfile, profileConfig)
+    return {
+      userConfig,
+      profileConfig,
+      effectiveProfile,
+      agents,
+    }
+  }
+
+  const initialConfigState = resolveActiveProfileConfig()
+  const { userConfig, profileConfig, effectiveProfile } = initialConfigState
 
   const strategy = createExecutionStrategy(effectiveProfile, {
     ...execution,
@@ -210,6 +312,7 @@ export function createOpenCodeAdapter(
       skills: tool.schema.array(tool.schema.string()).optional(),
     },
     async execute(args, context) {
+      const { agents } = resolveActiveProfileConfig()
       const targetAgent = args.subagent_type ?? profile.routing.defaultExecutor
       const runtimeContext = context as { sessionID?: string }
       
@@ -263,6 +366,7 @@ export function createOpenCodeAdapter(
   let profileLogged = false
   let profileToastShown = false
   const isPrintLogsMode = process.argv.includes("--print-logs")
+  const sessionAgentCache = new Map<string, string>()
 
   const profileMessage = "[domain-kernel] active profile: " + profileName + " (cwd: " + (_ctx.directory ?? process.cwd()) + ")"
 
@@ -302,6 +406,7 @@ export function createOpenCodeAdapter(
   }
 
   const configHook: Hooks["config"] = async (config) => {
+    const { agents } = resolveActiveProfileConfig()
     const current = config as Record<string, unknown>
     const currentAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
     const allMcpServers = current.mcp ? Object.keys(current.mcp as object) : []
@@ -322,6 +427,7 @@ export function createOpenCodeAdapter(
       finalAgents[name] = {
         ...baseAgent,
         ...agentCore,
+        skills: cfg.skills ?? (baseAgent.skills as string[] | undefined),
         permission: Object.keys(newPermission).length > 0 ? newPermission : undefined,
       }
     }
@@ -336,6 +442,7 @@ export function createOpenCodeAdapter(
   const afterHook: Hooks["tool.execute.after"] = async (input, output) => {
     if (disabledSet.has("chief-orchestrator")) return
     if (input.tool !== "chief_task") return
+    const { profileConfig } = resolveActiveProfileConfig()
     const qualityDims = (profileConfig?.quality?.dimensions ?? profile.quality.dimensions).join(", ")
     const passThreshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
     const rendered = [
@@ -351,6 +458,39 @@ export function createOpenCodeAdapter(
     emitProfileToast()
   }
 
+  const beforeHook: Hooks["tool.execute.before"] = async (
+    input,
+    output
+  ) => {
+    if (!input.sessionID) return
+    if (input.tool === "chief_task" || input.tool === "background_output" || input.tool === "background_cancel") {
+      return
+    }
+    if (!isChiefBlockedWebSearchTool(input.tool)) return
+
+    const cachedAgent = sessionAgentCache.get(input.sessionID)
+    let callerAgent = cachedAgent
+    if (!callerAgent) {
+      try {
+        const sessionClient = (_ctx.client as unknown as { session?: { get?: (args: { path: { id: string } }) => Promise<unknown> } }).session
+        const response = await sessionClient?.get?.({ path: { id: input.sessionID } })
+        const data = (response as { data?: { agent?: string } } | undefined)?.data
+        if (typeof data?.agent === "string" && data.agent.length > 0) {
+          callerAgent = data.agent.toLowerCase()
+          sessionAgentCache.set(input.sessionID, callerAgent)
+        }
+      } catch {}
+    }
+
+    if (callerAgent !== "chief") return
+
+    const mutableOutput = output as { args: Record<string, unknown>; message?: string }
+    mutableOutput.message = [
+      mutableOutput.message ?? "",
+      "[domain-kernel] Chief is orchestration-only for web/news requests. Delegate via chief_task to a specialist (for example: subagent_type=\"researcher\").",
+    ].filter(Boolean).join("\n")
+  }
+
   const eventHook: Hooks["event"] = async (input) => {
     if (
       input.event.type === "server.connected"
@@ -359,6 +499,21 @@ export function createOpenCodeAdapter(
     ) {
       emitProfileLog()
       emitProfileToast()
+    }
+    if (input.event.type === "session.updated" || input.event.type === "session.created") {
+      const eventProps = input.event.properties as { info?: { id?: string; agent?: string } } | undefined
+      const sessionID = eventProps?.info?.id
+      const agentName = eventProps?.info?.agent
+      if (sessionID && typeof agentName === "string" && agentName.length > 0) {
+        sessionAgentCache.set(sessionID, agentName.toLowerCase())
+      }
+    }
+    if (input.event.type === "session.deleted") {
+      const eventProps = input.event.properties as { info?: { id?: string } } | undefined
+      const sessionID = eventProps?.info?.id
+      if (sessionID) {
+        sessionAgentCache.delete(sessionID)
+      }
     }
   }
 
@@ -370,6 +525,7 @@ export function createOpenCodeAdapter(
       background_output: backgroundOutput,
       background_cancel: backgroundCancel,
     },
+    "tool.execute.before": beforeHook,
     "tool.execute.after": afterHook,
   }
 }

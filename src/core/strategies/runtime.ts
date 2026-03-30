@@ -208,6 +208,7 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
           body: {
             agent: input.subagentType,
             parts: [{ type: "text", text: input.prompt }],
+            ...(input.skills ? { skills: input.skills } : {}),
           },
         } as unknown
 
