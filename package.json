@@ -1,7 +1,15 @@
 {
   "name": "opencode-domain-kernel",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/stevewang1/opencode-domain-kernel.git"
+  },
+  "homepage": "https://github.com/stevewang1/opencode-domain-kernel",
+  "bugs": {
+    "url": "https://github.com/stevewang1/opencode-domain-kernel/issues"
+  },
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
