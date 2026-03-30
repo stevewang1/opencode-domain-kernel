@@ -26,7 +26,7 @@ export const AgentsConfigSchema = z.object({
 })
 
 export const ExecutionConfigSchema = z.object({
-  strategy: z.enum(["legacy-newtype", "builtin-legacy-bridge"]).optional(),
+  strategy: z.enum(["legacy-newtype", "runtime", "builtin-legacy-bridge"]).optional(),
   timeout: z.number().optional().default(600000),
 })
 

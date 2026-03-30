@@ -38,6 +38,28 @@ function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: str
   return rules
 }
 
+function normalizePermissionRules(
+  permission: Record<string, "allow" | "deny" | "ask"> | undefined
+): Record<string, "allow" | "deny" | "ask"> {
+  if (!permission) return {}
+  const next = { ...permission }
+  if (next.edit && !next["edit_*"]) {
+    next["edit_*"] = next.edit
+    delete next.edit
+  }
+  return next
+}
+
+function resolveExecutionStrategy(
+  profileConfig: ReturnType<typeof getProfileConfig>,
+  userConfig: DomainKernelConfig
+): DomainProfile["execution"]["strategy"] | undefined {
+  const configuredStrategy = profileConfig?.execution?.strategy ?? userConfig.execution?.strategy
+  if (!configuredStrategy) return undefined
+  if (configuredStrategy === "builtin-legacy-bridge") return "runtime"
+  return configuredStrategy
+}
+
 function injectModelPersona(agentName: string, model: string | undefined, basePrompt: string, description?: string): string {
   let prompt = basePrompt;
   if (description) {
@@ -161,9 +183,16 @@ export function createOpenCodeAdapter(
   const profileName = profile.name
   const profileConfig = getProfileConfig(userConfig, profileName)
     ?? getProfileConfig(userConfig, configuredDefaultProfile)
-  const agents = mergeAgentsConfig(profile, profileConfig)
+  const effectiveProfile = {
+    ...profile,
+    execution: {
+      ...profile.execution,
+      strategy: resolveExecutionStrategy(profileConfig, userConfig) ?? profile.execution.strategy,
+    },
+  } satisfies DomainProfile
+  const agents = mergeAgentsConfig(effectiveProfile, profileConfig)
 
-  const strategy = createExecutionStrategy(profile, {
+  const strategy = createExecutionStrategy(effectiveProfile, {
     ...execution,
     runtimeClient: resolveRuntimeClient(_ctx, execution),
     timeout: profileConfig?.execution?.timeout ?? userConfig.execution?.timeout,
@@ -241,7 +270,7 @@ export function createOpenCodeAdapter(
     for (const [name, cfg] of Object.entries(agents)) {
       const baseAgent = (finalAgents[name] as Record<string, unknown> | undefined) ?? {}
       const mcpDenyRules = buildMcpDenyRules(cfg.mcp, allMcpServers)
-      const configuredPermission = cfg.permission ?? {}
+      const configuredPermission = normalizePermissionRules(cfg.permission)
       
       const newPermission = {
         ...((baseAgent.permission as Record<string, unknown> | undefined) ?? {}),
