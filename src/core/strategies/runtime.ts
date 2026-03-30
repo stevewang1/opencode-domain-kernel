@@ -196,8 +196,12 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
       agent: input.subagentType,
     })
 
-    if (this.client && input.sessionID) {
-      const sessionID = await this.createSubSession(input.sessionID, input.description || input.prompt)
+    if (this.client) {
+      const sessionID = input.resume
+        ? input.resume
+        : input.sessionID
+          ? await this.createSubSession(input.sessionID, input.description || input.prompt)
+          : undefined
       if (sessionID) {
         const promptBody = {
           path: { id: sessionID },
@@ -245,6 +249,7 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
               `Task launched in background.`,
               `Task ID: ${task.id}`,
               `Session ID: ${sessionID}`,
+              input.resume ? `Mode: resume` : `Mode: new-session`,
               `Profile: ${this.profile.name}`,
               `Agent: ${input.subagentType}`,
             ].join("\n"),
@@ -259,7 +264,7 @@ export class RuntimeExecutionStrategy implements TaskExecutionStrategy {
           const result = [
             `Profile: ${this.profile.name}`,
             `Agent: ${input.subagentType}`,
-            `Mode: direct`,
+            input.resume ? `Mode: resume` : `Mode: direct`,
             `Session ID: ${sessionID}`,
             "",
             output ||

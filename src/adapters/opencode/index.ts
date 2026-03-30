@@ -157,8 +157,10 @@ export function createOpenCodeAdapter(
   execution?: ExecutionOptions
 ): Hooks {
   const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
-  const profileName = userConfig.defaultProfile || "content"
+  const configuredDefaultProfile = userConfig.defaultProfile || "content"
+  const profileName = profile.name
   const profileConfig = getProfileConfig(userConfig, profileName)
+    ?? getProfileConfig(userConfig, configuredDefaultProfile)
   const agents = mergeAgentsConfig(profile, profileConfig)
 
   const strategy = createExecutionStrategy(profile, {

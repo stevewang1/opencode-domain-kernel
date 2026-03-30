@@ -15,3 +15,12 @@ export type {
   ProfileConfig,
   DomainKernelConfig,
 } from "./schema.js"
+
+export {
+  defaultWorkspaceDomainRouting,
+  resolveDomainFromWorkspace,
+} from "./workspace-routing.js"
+
+export type {
+  WorkspaceDomainRouting,
+} from "./workspace-routing.js"
