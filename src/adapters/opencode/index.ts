@@ -52,11 +52,22 @@ function isChiefBlockedWebSearchTool(toolName: string): boolean {
   return false
 }
 
+function normalizeMcpName(name: string): string {
+  return name.trim().toLowerCase().replace(/[\s_-]+/g, "")
+}
+
+function resolveAllowedMcpNames(allowedMcps: string[] | undefined, allMcpServers: string[]): string[] | undefined {
+  if (!allowedMcps) return undefined
+  const allowedNormalized = new Set(allowedMcps.map(normalizeMcpName))
+  return allMcpServers.filter((server) => allowedNormalized.has(normalizeMcpName(server)))
+}
+
 function buildMcpDenyRules(allowedMcps: string[] | undefined, allMcpServers: string[]): Record<string, "allow" | "deny" | "ask"> {
   if (!allowedMcps) return {}
+  const allowedSet = new Set(allowedMcps.map(normalizeMcpName))
   const rules: Record<string, "allow" | "deny" | "ask"> = {}
   for (const server of allMcpServers) {
-    if (!allowedMcps.includes(server)) rules[server + "_*"] = "deny"
+    if (!allowedSet.has(normalizeMcpName(server))) rules[server + "_*"] = "deny"
   }
   return rules
 }
@@ -77,7 +88,38 @@ function normalizePermissionRules(
   permission: Record<string, "allow" | "deny" | "ask"> | undefined
 ): Record<string, "allow" | "deny" | "ask"> {
   if (!permission) return {}
-  const next = { ...permission }
+  const next: Record<string, "allow" | "deny" | "ask"> = {}
+  const applyPermission = (keys: string[], value: "allow" | "deny" | "ask") => {
+    for (const key of keys) next[key] = value
+  }
+  for (const [rawKey, value] of Object.entries(permission)) {
+    const key = rawKey.trim()
+    const lower = key.toLowerCase()
+    if (lower === "webfetch") {
+      applyPermission(["webfetch", "WebFetch"], value)
+      continue
+    }
+    if (lower === "write") {
+      applyPermission(["write", "edit", "edit_*"], value)
+      continue
+    }
+    if (lower === "task") {
+      applyPermission(["task", "chief_task"], value)
+      continue
+    }
+    if (lower === "edit") {
+      applyPermission(["edit", "edit_*"], value)
+      continue
+    }
+    if (lower === "google_search") {
+      applyPermission(
+        ["google_search", "web_search", "search_engine", "news_search", "tavily_search", "tavily_extract", "tavily_crawl", "mcp_tavily_*", "mcp_Tavily_*"],
+        value
+      )
+      continue
+    }
+    next[key] = value
+  }
   if (next.edit && !next["edit_*"]) {
     next["edit_*"] = next.edit
     delete next.edit
@@ -421,11 +463,12 @@ export function createOpenCodeAdapter(
 
     for (const [name, cfg] of Object.entries(agents)) {
       const baseAgent = (finalAgents[name] as Record<string, unknown> | undefined) ?? {}
-      const mcpDenyRules = buildMcpDenyRules(cfg.mcp, allMcpServers)
+      const resolvedMcp = resolveAllowedMcpNames(cfg.mcp, allMcpServers)
+      const mcpDenyRules = buildMcpDenyRules(resolvedMcp ?? cfg.mcp, allMcpServers)
       const configuredPermission = normalizePermissionRules(cfg.permission)
       
       const newPermission = {
-        ...((baseAgent.permission as Record<string, unknown> | undefined) ?? {}),
+        ...(cfg.permission ? {} : ((baseAgent.permission as Record<string, unknown> | undefined) ?? {})),
         ...mcpDenyRules,
         ...configuredPermission,
       }
@@ -435,6 +478,7 @@ export function createOpenCodeAdapter(
         ...baseAgent,
         ...agentCore,
         skills: cfg.skills ?? (baseAgent.skills as string[] | undefined),
+        mcp: resolvedMcp ?? cfg.mcp ?? (baseAgent.mcp as string[] | undefined),
         permission: Object.keys(newPermission).length > 0 ? newPermission : undefined,
       }
     }
