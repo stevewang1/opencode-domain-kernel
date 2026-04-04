@@ -1,8 +1,14 @@
+import * as fs from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
 import { tool, type Hooks, type PluginInput } from "@opencode-ai/plugin"
 import { createExecutionStrategy } from "../../core/strategies/index.js"
 import type { ExecutionOptions, RuntimeSessionClient } from "../../core/strategy.js"
 import type { DomainProfile } from "../../core/types.js"
 import { loadPluginConfig, getProfileConfig, type DomainKernelConfig } from "../../plugin-config.js"
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 function isRuntimeSessionClient(value: unknown): value is RuntimeSessionClient {
   if (!value || typeof value !== "object") return false
@@ -154,39 +160,34 @@ function injectModelPersona(agentName: string, model: string | undefined, basePr
   }
   const modelLower = model ? model.toLowerCase() : '';
 
+  const getPrompt = (file: string) => {
+    try {
+      const promptPath = path.resolve(__dirname, '../../../src/adapters/opencode/prompts', file);
+      if (fs.existsSync(promptPath)) {
+        return fs.readFileSync(promptPath, 'utf-8').trim();
+      }
+      return '';
+    } catch {
+      return '';
+    }
+  };
+
   if (modelLower.includes('gemini')) {
-    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
-              '## YOU MUST USE TOOLS FOR EVERY ACTION. THIS IS NOT OPTIONAL.\n' +
-              '**YOUR FAILURE MODE**: You believe you can reason through file contents, task status, and verification without actually calling tools. You CANNOT. Your internal state about files you \'already know\' is UNRELIABLE.\n' +
-              '1. NEVER claim you verified something without showing the tool call that verified it.\n' +
-              '2. NEVER reason about what a changed file \'probably looks like.\' Call Read on it.\n' +
-              '</CRITICAL_MODEL_INSTRUCTION>';
+    prompt += '\n\n' + getPrompt('gemini.md');
   }
   
   if (modelLower.includes('glm') || modelLower.includes('qwen') || modelLower.includes('deepseek')) {
-    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
-              'Strictly adhere to the required output formats and tool schemas. Do NOT output markdown code blocks unless requested. Do NOT hallucinate parameters. Focus only on the requested task.\n' +
-              '</CRITICAL_MODEL_INSTRUCTION>';
+    prompt += '\n\n' + getPrompt('deepseek.md');
   }
 
   if (modelLower.includes("kimi") || modelLower.includes("moonshot")) {
-    prompt += '\n\n<CRITICAL_MODEL_INSTRUCTION>\n' +
-              'When you are chief, your first substantive action must be delegation via chief_task for execution work (including web/news search).\n' +
-              'Never claim that you already searched anything unless there is explicit tool evidence from delegated tasks.\n' +
-              '</CRITICAL_MODEL_INSTRUCTION>';
+    prompt += '\n\n' + getPrompt('kimi.md');
   }
 
   if (agentName === 'chief') {
-    prompt += '\n\n<ROLE_ENFORCEMENT>\n' +
-              'CRITICAL RULE: YOU MUST NEVER WRITE CODE, EXECUTE COMMANDS, OR DO THE WORK YOURSELF.\n' +
-              'You are Atlas - Master Orchestrator. Role: Conductor, not musician. General, not soldier.\n' +
-              'You DELEGATE, COORDINATE, and VERIFY. Your ONLY job is to break down the request, create a plan using todowrite, and delegate EVERY single implementation step to subagents using \'chief_task\'.\n' +
-              'When subagents return, you MUST verify their work. Remember: Subagents lie, always verify using read or lsp tools.\n' +
-              '</ROLE_ENFORCEMENT>';
-  } else if (agentName === 'deputy' || agentName === 'general' || agentName === 'explore' || agentName === 'researcher') {
-    prompt += '\n\n<ROLE_ENFORCEMENT>\n' +
-              'You are an IMPLEMENTER. You DO NOT delegate tasks. You use your available tools to complete the work assigned to you directly and completely. You NEVER use \'chief_task\'.\n' +
-              '</ROLE_ENFORCEMENT>';
+    prompt += '\n\n' + getPrompt('chief.md');
+  } else {
+    prompt += '\n\n' + getPrompt('subagent.md');
   }
   return prompt;
 }
@@ -219,93 +220,57 @@ function mergeAgentsConfig(
     "chief_task": "deny" as const,
   }
 
-  const chiefSkills = normalizeNameList(profileConfig?.agents?.chief?.skills)
-  const chiefMcp = normalizeNameList(profileConfig?.agents?.chief?.mcp)
-  agents.chief = {
-    model: profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model,
-    mode: profileConfig?.agents?.chief?.mode,
-    prompt: injectSkillScope(
-      "chief",
-      injectModelPersona("chief", profileConfig?.agents?.chief?.model ?? profile.agents.chief?.model, profile.prompts.chief, profileConfig?.agents?.chief?.description),
-      chiefSkills
-    ),
-    skills: chiefSkills,
-    mcp: chiefMcp,
-    permission: { ...defaultChiefPerms, ...(profileConfig?.agents?.chief?.permission || {}) }
-  }
+  const allAgentNames = new Set<string>([
+    ...Object.keys(profile.agents ?? {}),
+    ...Object.keys(profileConfig?.agents ?? {})
+  ]);
 
-  const deputySkills = normalizeNameList(profileConfig?.agents?.deputy?.skills)
-  const deputyMcp = normalizeNameList(profileConfig?.agents?.deputy?.mcp)
-  agents.deputy = {
-    model: profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model,
-    mode: profileConfig?.agents?.deputy?.mode,
-    prompt: injectSkillScope(
-      "deputy",
-      injectModelPersona("deputy", profileConfig?.agents?.deputy?.model ?? profile.agents.deputy?.model, profile.prompts.deputy + scoringPrompt, profileConfig?.agents?.deputy?.description),
-      deputySkills
-    ),
-    temperature: profileConfig?.agents?.deputy?.temperature ?? profile.agents.deputy?.temperature,
-    skills: deputySkills,
-    mcp: deputyMcp,
-    permission: { ...defaultSubagentPerms, ...(profileConfig?.agents?.deputy?.permission || {}) }
-  }
+  for (const agentName of allAgentNames) {
+    const baseAgent = profile.agents?.[agentName as keyof typeof profile.agents] as any;
+    const userAgent = (profileConfig?.agents as any)?.[agentName];
+    const model = userAgent?.model ?? baseAgent?.model;
 
-  if (profileConfig?.agents?.explore?.model) {
-    const exploreSkills = normalizeNameList(profileConfig.agents.explore.skills)
-    const exploreMcp = normalizeNameList(profileConfig.agents.explore.mcp)
-    agents.explore = {
-      model: profileConfig.agents.explore.model,
-      mode: profileConfig.agents.explore.mode ?? "all",
-      hidden: false,
+    if (!model) continue;
+
+    const skills = normalizeNameList(userAgent?.skills ?? baseAgent?.skills);
+    const mcp = normalizeNameList(userAgent?.mcp ?? baseAgent?.mcp);
+    let mode = userAgent?.mode ?? baseAgent?.mode;
+    
+    if (!mode && (agentName === "general" || agentName === "explore")) {
+        mode = "all";
+    }
+
+    const temperature = userAgent?.temperature ?? baseAgent?.temperature;
+    const isChief = agentName === "chief";
+    
+    let basePromptText = userAgent?.prompt ?? (profile.prompts as any)?.[agentName];
+    if (!basePromptText) {
+      if (isChief) basePromptText = profile.prompts?.chief ?? "";
+      else if (agentName === "deputy") basePromptText = profile.prompts?.deputy ?? "";
+      else if (agentName === "explore") basePromptText = "You are a code explorer.";
+      else if (agentName === "general") basePromptText = "You are a general purpose assistant.";
+      else basePromptText = `You are a ${agentName}.`;
+    }
+
+    const description = userAgent?.description ?? baseAgent?.description;
+    const promptWithScoring = isChief ? basePromptText : basePromptText + scoringPrompt;
+    const defaultPerms = isChief ? defaultChiefPerms : defaultSubagentPerms;
+    const explicitPerms = userAgent?.permission ?? baseAgent?.permission ?? {};
+
+    agents[agentName] = {
+      model,
+      mode,
+      hidden: userAgent?.hidden ?? baseAgent?.hidden ?? false,
+      temperature,
       prompt: injectSkillScope(
-        "explore",
-        injectModelPersona("explore", profileConfig.agents.explore.model, "You are a code explorer." + scoringPrompt, profileConfig.agents.explore.description),
-        exploreSkills
+        agentName,
+        injectModelPersona(agentName, model, promptWithScoring, description),
+        skills
       ),
-      skills: exploreSkills,
-      mcp: exploreMcp,
-      permission: { ...defaultSubagentPerms, ...(profileConfig.agents.explore.permission || {}) }
-    }
-  }
-
-  if (profileConfig?.agents?.general?.model) {
-    const generalSkills = normalizeNameList(profileConfig.agents.general.skills)
-    const generalMcp = normalizeNameList(profileConfig.agents.general.mcp)
-    agents.general = {
-      model: profileConfig.agents.general.model,
-      mode: profileConfig.agents.general.mode ?? "all",
-      hidden: false,
-      prompt: injectSkillScope(
-        "general",
-        injectModelPersona("general", profileConfig.agents.general.model, "You are a general purpose assistant." + scoringPrompt, profileConfig.agents.general.description),
-        generalSkills
-      ),
-      skills: generalSkills,
-      mcp: generalMcp,
-      permission: { ...defaultSubagentPerms, ...(profileConfig.agents.general.permission || {}) }
-    }
-  }
-
-  const otherAgents = ["researcher", "writer", "editor", "fact-checker", "archivist", "extractor"] as const
-  for (const agentName of otherAgents) {
-    const agentConfig = profileConfig?.agents?.[agentName]
-    if (agentConfig?.model) {
-      const agentSkills = normalizeNameList(agentConfig.skills)
-      const agentMcp = normalizeNameList(agentConfig.mcp)
-      agents[agentName] = {
-        model: agentConfig.model,
-        mode: agentConfig.mode,
-        prompt: injectSkillScope(
-          agentName,
-          injectModelPersona(agentName, agentConfig.model, "You are a " + agentName + "." + scoringPrompt, agentConfig.description),
-          agentSkills
-        ),
-        temperature: agentConfig.temperature,
-        skills: agentSkills,
-        mcp: agentMcp,
-        permission: { ...defaultSubagentPerms, ...(agentConfig.permission || {}) }
-      }
-    }
+      skills,
+      mcp,
+      permission: { ...defaultPerms, ...explicitPerms }
+    };
   }
 
   return agents
