@@ -147,6 +147,30 @@ function resolveExecutionStrategy(
   return configuredStrategy
 }
 
+function buildDynamicDelegationTable(
+  allAgents: Record<string, { model?: string; description?: string; skills?: string[]; mcp?: string[] }>
+): string {
+  const subagents = Object.entries(allAgents).filter(([name]) => name !== 'chief');
+  if (subagents.length === 0) return '';
+
+  const rows = subagents.map(([name, cfg]) => {
+    const desc = cfg.description || name;
+    const skills = cfg.skills?.join(', ') || '(none)';
+    const mcps = cfg.mcp?.join(', ') || '(all)';
+    return `| ${name} | ${desc} | ${skills} | ${mcps} |`;
+  });
+
+  return '\n\n<Available_Subagents>\n'
+    + '## Available Subagents for Delegation\n\n'
+    + 'Use chief_task with subagent_type to delegate to these agents:\n\n'
+    + '| Agent | Description | Skills | MCP |\n'
+    + '|---|---|---|---|\n'
+    + rows.join('\n') + '\n'
+    + '\nDelegate to the agent whose description best matches the task domain.\n'
+    + 'Always specify subagent_type explicitly — do NOT guess agent names not listed here.\n'
+    + '</Available_Subagents>';
+}
+
 function injectSkillScope(agentName: string, prompt: string, skills: string[] | undefined): string {
   if (!skills) return prompt
   const listText = skills.length > 0 ? skills.join(", ") : "(none)"
@@ -194,9 +218,10 @@ function injectModelPersona(agentName: string, model: string | undefined, basePr
 
 function mergeAgentsConfig(
   profile: DomainProfile,
-  profileConfig: ReturnType<typeof getProfileConfig>
-): Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> {
-  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; permission?: Record<string, "allow"|"deny"|"ask"> }> = {}
+  profileConfig: ReturnType<typeof getProfileConfig>,
+  uiSelectedModel?: string
+): Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; description?: string; permission?: Record<string, "allow"|"deny"|"ask"> }> {
+  const agents: Record<string, { model?: string; prompt?: string; temperature?: number; mode?: "subagent" | "primary" | "all"; hidden?: boolean; skills?: string[]; mcp?: string[]; description?: string; permission?: Record<string, "allow"|"deny"|"ask"> }> = {}
 
   const dimensions = profileConfig?.quality?.dimensions ?? profile.quality.dimensions
   const threshold = profileConfig?.quality?.passThreshold ?? profile.quality.passThreshold
@@ -228,17 +253,23 @@ function mergeAgentsConfig(
   for (const agentName of allAgentNames) {
     const baseAgent = profile.agents?.[agentName as keyof typeof profile.agents] as any;
     const userAgent = (profileConfig?.agents as any)?.[agentName];
-    const model = userAgent?.model ?? baseAgent?.model;
+    let mode = userAgent?.mode ?? baseAgent?.mode;
+    if (!mode && (agentName === 'general' || agentName === 'explore')) {
+      mode = 'all';
+    }
+    // 三级瀑布模型解析（借鉴 OMO）：
+    // 1. JSON 配置锁定的 model（最高优先级）
+    // 2. primary 模式代理跟随 UI 选中的模型
+    // 3. 都没有则跳过
+    const jsonModel = userAgent?.model ?? baseAgent?.model;
+    const isPrimary = agentName === 'chief' || mode === 'primary';
+    const model = jsonModel ?? (isPrimary ? uiSelectedModel : undefined);
 
     if (!model) continue;
 
     const skills = normalizeNameList(userAgent?.skills ?? baseAgent?.skills);
     const mcp = normalizeNameList(userAgent?.mcp ?? baseAgent?.mcp);
-    let mode = userAgent?.mode ?? baseAgent?.mode;
-    
-    if (!mode && (agentName === "general" || agentName === "explore")) {
-        mode = "all";
-    }
+    // mode 已在上面解析
 
     const temperature = userAgent?.temperature ?? baseAgent?.temperature;
     const isChief = agentName === "chief";
@@ -262,6 +293,7 @@ function mergeAgentsConfig(
       mode,
       hidden: userAgent?.hidden ?? baseAgent?.hidden ?? false,
       temperature,
+      description,
       prompt: injectSkillScope(
         agentName,
         injectModelPersona(agentName, model, promptWithScoring, description),
@@ -271,6 +303,11 @@ function mergeAgentsConfig(
       mcp,
       permission: { ...defaultPerms, ...explicitPerms }
     };
+  }
+
+  // 动态注入委派表到 Chief 的 prompt（借鉴 OMO 的 buildDelegationTable）
+  if (agents['chief']?.prompt) {
+    agents['chief'].prompt += buildDynamicDelegationTable(agents);
   }
 
   return agents
@@ -284,7 +321,7 @@ export function createOpenCodeAdapter(
   execution?: ExecutionOptions
 ): Hooks {
   const profileName = profile.name
-  const resolveActiveProfileConfig = () => {
+  const resolveActiveProfileConfig = (uiSelectedModel?: string) => {
     const userConfig = loadPluginConfig(_ctx.directory ?? process.cwd())
     const configuredDefaultProfile = userConfig.defaultProfile || "content"
     const profileConfig = getProfileConfig(userConfig, profileName)
@@ -296,7 +333,7 @@ export function createOpenCodeAdapter(
         strategy: resolveExecutionStrategy(profileConfig, userConfig) ?? profile.execution.strategy,
       },
     } satisfies DomainProfile
-    const agents = mergeAgentsConfig(effectiveProfile, profileConfig)
+    const agents = mergeAgentsConfig(effectiveProfile, profileConfig, uiSelectedModel)
     return {
       userConfig,
       profileConfig,
@@ -420,7 +457,9 @@ export function createOpenCodeAdapter(
   }
 
   const configHook: Hooks["config"] = async (config) => {
-    const { agents } = resolveActiveProfileConfig()
+    // 从 OpenCode 运行时拿到用户当前在 UI 里选中的模型
+    const uiModel = (config as Record<string, unknown>).model as string | undefined;
+    const { agents } = resolveActiveProfileConfig(uiModel)
     const current = config as Record<string, unknown>
     const currentAgents = (current.agent as Record<string, unknown> | undefined) ?? {}
     const allMcpServers = current.mcp ? Object.keys(current.mcp as object) : []
